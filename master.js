@@ -38,19 +38,19 @@ function fmtShort(v){
 function fmtN(v){return(Number(v)||0).toLocaleString('en-IN');}
 
 function statusPill(a){
-  var s=String(a||'').toLowerCase();
-  var ok=s==='active'||s==='1'||s==='yes'||Number(a)>0;
+  var s=String(a||'').toLowerCase().trim();
+  var ok=s==='active'||s==='1'||s==='yes';
   return ok
     ?'<span class="pill pill-active">● Active</span>'
     :'<span class="pill pill-inactive">○ Inactive</span>';
 }
 function growthPill(g){
   var s=String(g||'').toLowerCase();
-  if(s.indexOf('degrowth')>=0)return'<span class="pill pill-degrowth">▼ Degrowth</span>';
-  if(s.indexOf('growth')>=0)return'<span class="pill pill-growth">▲ Growth</span>';
-  var pv=parseFloat(String(g).replace('%',''))||0;
-  if(pv>0)return'<span class="pill pill-growth">▲ Growth</span>';
-  if(pv<0)return'<span class="pill pill-degrowth">▼ Degrowth</span>';
+  if(s==='growth')return'<span class="pill pill-growth">▲ Growth</span>';
+  if(s==='degrowth')return'<span class="pill pill-degrowth">▼ Degrowth</span>';
+  var pv=parseFloat(String(g).replace(/%/g,'').trim())||0;
+  if(pv>0)return'<span class="pill pill-growth">▲ '+g+'</span>';
+  if(pv<0)return'<span class="pill pill-degrowth">▼ '+g+'</span>';
   return'<span class="pill pill-inactive">— Flat</span>';
 }
 
@@ -89,12 +89,15 @@ function summarizeList(partners){
     s.ftd    +=p.ftd||0;    s.calls  +=p.calls||0;
     s.visits +=p.visits||0; s.maxPot +=p.maxPot||0;
     s.oPot   +=p.oPot||0;   s.target +=p.target||0;
-    var a=String(p.active||'').toLowerCase();
-    if(a==='active'||a==='1'||a==='yes'||Number(p.active)>0)s.active++;else s.inactive++;
+    if(String(p.active||'').toLowerCase()==='active')s.active++;else s.inactive++;
     if(p.calls>0||p.visits>0)s.connected++;else s.notConn++;
-    var g=String(p.growth||'').toLowerCase();
-    if(g.indexOf('degrowth')>=0)s.degrowth++;
-    else if(g.indexOf('growth')>=0||parseFloat(String(p.growth||''))>0)s.growth++;
+    if(p.growthClass){
+      if(p.growthClass==='growth')s.growth++;
+      else if(p.growthClass==='degrowth')s.degrowth++;
+    } else {
+      var gv=parseFloat(String(p.growth||'').replace(/%/g,'').trim())||0;
+      if(gv>0)s.growth++; else if(gv<0)s.degrowth++;
+    }
   });
   s.mom=s.lmtd>0?Math.round((s.mtd-s.lmtd)*100/s.lmtd):0;
   s.ach=s.target>0?Math.round(s.mtd*100/s.target):0;
@@ -357,7 +360,7 @@ function renderAllPartners(){
       '<td class="val-dim">'+fmt(p.maxPot)+'</td>'+
       '<td class="val-amber">'+fmt(p.oPot)+'</td>'+
       '<td class="val-dim">'+fmt(p.target)+'</td>'+
-      '<td class="'+(p.mtd>p.lmtd?'val-green':'val-amber')+'">'+fmt(p.mtd)+'</td>'+
+      '<td class="'+(p.mtd>p.lmtd?'val-green':p.mtd<p.lmtd?'val-red':'val-amber')+'">'+fmt(p.mtd)+'</td>'+
       '<td class="val-dim">'+fmt(p.lmtd)+'</td>'+
       '<td class="'+(mom>=0?'val-green':'val-red')+'">'+(mom>=0?'+':'')+mom+'%</td>'+
       '<td>'+growthPill(p.growth)+'</td>'+

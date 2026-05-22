@@ -574,3 +574,22 @@ body{
   .modal-kpi-row{grid-template-columns:repeat(2,1fr);}
   .team-grid{grid-template-columns:1fr;}
 }
+
+/* ── GOLDEN / FTD COLOR ──────────────────────────────────────── */
+.val-gold { color: #ffab00 !important; font-weight: 700; font-family: var(--mono); font-size: 13px; }
+.text-gold { color: #ffab00 !important; font-weight: 700; }
+
+/* ── TABLE HORIZONTAL SCROLL (fix truncation) ─────────────────── */
+.table-wrap { overflow-x: auto !important; }
+.tbl { min-width: 1200px; }
+.tbl td, .tbl th { white-space: nowrap; }
+
+/* ── MTD COLOR OVERRIDES ─────────────────────────────────────── */
+.val-red { color: var(--red) !important; font-weight: 600; font-family: var(--mono); font-size: 13px; }
+
+/* ── GROWTH PILL BOLD ────────────────────────────────────────── */
+.pill-growth  { font-weight: 700 !important; }
+.pill-degrowth { font-weight: 700 !important; }
+
+/* ── MAX POT LABEL GOLDEN ────────────────────────────────────── */
+#ovMaxPot { color: #ffab00 !important; }

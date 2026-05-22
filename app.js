@@ -61,8 +61,8 @@ function statusPill(active){
 function growthPill(growth){
   var g=String(growth||'').toLowerCase();
   var gn=parseFloat(String(growth||'').replace(/%/g,'').trim())||0;
-  if(gn>0) return '<span class="pill pill-growth">▲ '+String(growth)+'</span>';
-  if(gn<0) return '<span class="pill pill-degrowth">▼ '+String(growth)+'</span>';
+  if(gn>0) return '<span class="pill pill-growth" style="font-weight:700">▲ '+String(growth)+'</span>';
+  if(gn<0) return '<span class="pill pill-degrowth" style="font-weight:700">▼ '+String(growth)+'</span>';
   return '<span class="pill pill-inactive">— Flat</span>';
   return '<span class="pill pill-inactive">— Flat</span>';
 }
@@ -178,7 +178,7 @@ function setupNav(){
 
   // Hide/show tabs based on role
   if(isTele){
-    $('tabTeleRM').style.display='';
+    $('tabTeleRM').style.display=(role==='ZH'?'':'none');
     $('tabAMPerf').style.display='';
     $('tabTeamPerf').style.display='';
   } else if(isZH||isSH){
@@ -227,7 +227,7 @@ function buildAllData(){
     MY_PARTNERS  = ALL_PARTNERS.filter(function(p){
       return p.oName===name || p.oEmp===USER.empId;
     });
-    if(MY_PARTNERS.length===0) MY_PARTNERS=ALL_PARTNERS; // fallback
+    if(MY_PARTNERS.length===0&&role==='ZH')MY_PARTNERS=ALL_PARTNERS.filter(function(p){return p.oName===name;});
   }
 
   buildOverview();
@@ -245,7 +245,7 @@ function buildOverview(){
   $('ovMTD').textContent   = fmt(s.mtd||0).replace('₹','');
   $('ovMTD2').textContent  = fmt(s.mtd||0).replace('₹','');
   $('ovLMTD').textContent  = fmt(s.lmtd||0).replace('₹','');
-  $('ovMaxPot').textContent= fmt(s.maxPot||0).replace('₹','');
+  $('ovMaxPot').textContent=fmt(s.maxPot||0).replace('₹','');var _mp=$('ovMaxPot');if(_mp)_mp.style.color='#ffab00';
   $('ovOPot').textContent  = fmt(s.oPot||0).replace('₹','');
   $('ovTarget').textContent= fmt(s.target||0).replace('₹','');
   $('ovMaxAch').textContent= fmtPct(s.maxAch||0);
@@ -500,7 +500,7 @@ function partnerRow(p, showOwner){
     '<td class="val-dim">'+fmt(p.maxPot)+'</td>'+
     '<td class="val-amber">'+fmt(p.oPot)+'</td>'+
     '<td class="val-dim">'+fmt(p.target)+'</td>'+
-    '<td class="'+(p.mtd>p.lmtd?'val-green':'val-amber')+'">'+fmt(p.mtd)+'</td>'+
+    '<td class="'+(p.mtd>p.lmtd?'val-green':p.mtd<p.lmtd?'val-red':'val-amber')+'">'+fmt(p.mtd)+'</td>'+
     '<td class="val-dim">'+fmt(p.lmtd)+'</td>'+
     '<td class="'+momClass+'">'+(mom>=0?'+':'')+mom+'%</td>'+
     '<td>'+growthPill(p.growth)+'</td>'+
@@ -523,7 +523,7 @@ function myPartnerRow(p){
     '<td class="val-dim">'+fmt(p.maxPot)+'</td>'+
     '<td class="val-amber">'+fmt(p.oPot)+'</td>'+
     '<td class="val-dim">'+fmt(p.target)+'</td>'+
-    '<td class="'+(p.mtd>p.lmtd?'val-green':'val-amber')+'">'+fmt(p.mtd)+'</td>'+
+    '<td class="'+(p.mtd>p.lmtd?'val-green':p.mtd<p.lmtd?'val-red':'val-amber')+'">'+fmt(p.mtd)+'</td>'+
     '<td class="val-dim">'+fmt(p.lmtd)+'</td>'+
     '<td>'+growthPill(p.growth)+'</td>'+
     '<td>'+statusPill(p.active)+'</td>'+
@@ -784,7 +784,7 @@ function buildPartnerModal(p){
     '<div class="modal-kpi"><div class="mk-label">Max Potential</div><div class="mk-value amber">'+fmt(p.maxPot)+'</div></div>'+
     '<div class="modal-kpi"><div class="mk-label">Overall Pot.</div><div class="mk-value amber">'+fmt(p.oPot)+'</div></div>'+
     '<div class="modal-kpi"><div class="mk-label">Net Combined</div><div class="mk-value">'+fmt(p.net)+'</div></div>'+
-    '<div class="modal-kpi"><div class="mk-label">Avg Monthly</div><div class="mk-value">'+fmt(p.avg)+'</div></div>'+
+    '<div class="modal-kpi"><div class="mk-label">FTD (Today)</div><div class="mk-value" style="color:#ffab00;font-weight:700">'+fmt(p.ftd)+'</div></div>'+
     '</div>';
 
   // 14-month bar chart
