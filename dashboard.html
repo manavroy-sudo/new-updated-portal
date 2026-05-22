@@ -1,343 +1,162 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AM &amp; Above Focused Partners — InsuranceDekho</title>
-<link rel="stylesheet" href="style.css">
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>InsuranceDekho Performance Portal</title>
+<link rel="stylesheet" href="style.css"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
-<body>
+<body class="dashboard-body">
 
-<!-- ── LOGIN ──────────────────────────────────────────────── -->
-<div id="loginScreen">
-  <div class="login-box">
-    <div class="login-logo">
-      <div class="ll-icon">ID</div>
-      <div class="ll-text">
-        <div class="ll-title">Partner Engage</div>
-        <div class="ll-sub">InsuranceDekho Performance Portal</div>
-      </div>
-    </div>
-    <h3>AM &amp; Above Focused Partners</h3>
-    <p>Enter your GID and password to access your dashboard</p>
-    <div class="form-group">
-      <label>GID / Employee ID</label>
-      <input type="text" id="loginGID" placeholder="e.g. IDK-10055070" autocomplete="username">
-    </div>
-    <div class="form-group">
-      <label>Password</label>
-      <input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password">
-    </div>
-    <button class="btn-login" id="btnLogin">Sign In</button>
-    <div class="error-msg" id="loginError"></div>
-  </div>
-</div>
-
-<!-- ── LOADING ─────────────────────────────────────────────── -->
-<div id="loadingScreen" style="display:none">
-  <div class="spinner"></div>
-  <p id="loadingMsg">Loading your dashboard…</p>
-</div>
-
-<!-- ── APP SHELL ───────────────────────────────────────────── -->
-<div id="appShell" style="display:none">
-  <div id="header">
+<!-- TOP BAR -->
+<header class="topbar">
+  <div class="topbar-left">
     <div class="brand">
-      <div class="brand-logo">ID</div>
-      <div class="brand-text">
-        <div class="brand-title">AM and Above Focused Partners</div>
+      <span class="brand-mark">ID</span>
+      <div>
+        <div class="brand-name">AM and Above Focused Partners</div>
         <div class="brand-sub">InsuranceDekho Performance Portal</div>
       </div>
     </div>
-    <div class="user-info">
-      <div>
-        <div class="user-name" id="hdrName">—</div>
-        <div class="user-role" id="hdrRole">—</div>
-      </div>
-      <button id="btnLogout">Logout</button>
+  </div>
+  <div class="topbar-right">
+    <div class="user-chip">
+      <div class="user-chip-name" id="userName">—</div>
+      <div class="user-chip-role" id="userRole">—</div>
     </div>
+    <button class="btn-ghost" id="btnLogout">Logout</button>
+  </div>
+</header>
+
+<!-- TABS: Overview | All Partners | My Partners | Team Performance -->
+<!-- REMOVED: AM Performance, Daily Run Rate -->
+<nav class="tabs" id="navTabs">
+  <button class="tab active" data-tab="overview">Overview</button>
+  <button class="tab" data-tab="all">All Partners</button>
+  <button class="tab" data-tab="mine" id="tabMine">My Partners</button>
+  <button class="tab" data-tab="team">Team Performance</button>
+</nav>
+
+<div id="statusBar" class="status-bar hidden"></div>
+
+<!-- ======= OVERVIEW ======= -->
+<section class="tab-pane active" id="pane-overview">
+  <h2 class="section-title">Overview</h2>
+  <p class="section-sub">Live snapshot within your assigned scope.</p>
+  <div id="overviewContent">
+    <div class="empty-state"><div class="es-icon">⏳</div><div class="es-msg">Loading…</div></div>
+  </div>
+</section>
+
+<!-- ======= ALL PARTNERS ======= -->
+<section class="tab-pane" id="pane-all">
+  <h2 class="section-title">All Partners</h2>
+  <p class="section-sub">Every partner in your scope. Use filters to drill down.</p>
+
+  <div class="filter-bar">
+    <input type="text" id="apSearch"  placeholder="Search name / GID / city…" oninput="apFilter()"/>
+    <select id="apZone"   onchange="apFilter()"><option value="">All Zones</option></select>
+    <select id="apState"  onchange="apFilter()"><option value="">All States</option></select>
+    <select id="apStatus" onchange="apFilter()"><option value="">All Status</option><option>Active</option><option>Inactive</option></select>
+    <select id="apOwner"  onchange="apFilter()"><option value="">All Owners</option></select>
+    <button class="btn-clear" onclick="apClear()">Clear</button>
+    <button class="btn-export" onclick="exportCSV('all')">Export CSV</button>
   </div>
 
-  <div id="nav">
-    <button class="nav-tab active" data-tab="overview">Overview</button>
-    <button class="nav-tab" data-tab="allPartners">All Partners</button>
-    <button class="nav-tab" data-tab="myPartners">My Partners</button>
-    <button class="nav-tab" data-tab="amPerf" id="tabAMPerf">AM Performance</button>
-    <button class="nav-tab" data-tab="teamPerf" id="tabTeamPerf">Team Performance</button>
-    <button class="nav-tab" data-tab="teleRM" id="tabTeleRM" style="display:none">📞 Tele-RM</button>
-    <button class="nav-tab" data-tab="dailyRR">Daily Run Rate</button>
+  <div class="table-wrap">
+    <table class="ptable" id="apTable">
+      <thead>
+        <tr>
+          <th>View</th><th>GID</th><th>Partner Name</th><th>City</th><th>State</th>
+          <th>Zone</th><th>Owner (AM)</th><th>Role</th>
+          <th>Max Pot</th><th>Overall Pot</th><th>Target</th>
+          <th>MTD</th><th>LMTD</th><th>MoM%</th><th>Growth%</th>
+          <th>Ach%</th><th>Status</th><th>Calls</th><th>Visits</th>
+        </tr>
+      </thead>
+      <tbody id="apTbody"></tbody>
+    </table>
+  </div>
+  <div id="apPagination" class="pg-wrap"></div>
+</section>
+
+<!-- ======= MY PARTNERS ======= -->
+<section class="tab-pane" id="pane-mine">
+  <h2 class="section-title" id="mineTitle">My Partners</h2>
+  <p class="section-sub" id="mineSub">Partners directly assigned to you.</p>
+
+  <div class="filter-bar">
+    <input type="text" id="mpSearch" placeholder="Search…" oninput="mpFilter()"/>
+    <select id="mpState" onchange="mpFilter()"><option value="">All States</option></select>
+    <select id="mpStatus" onchange="mpFilter()"><option value="">All Status</option><option>Active</option><option>Inactive</option></select>
+    <button class="btn-clear" onclick="mpClear()">Clear</button>
+    <button class="btn-export" onclick="exportCSV('mine')">Export CSV</button>
   </div>
 
-  <div id="main">
+  <div class="table-wrap">
+    <table class="ptable" id="mpTable">
+      <thead>
+        <tr>
+          <th>View</th><th>GID</th><th>Partner Name</th><th>City</th><th>State</th>
+          <th>Max Pot</th><th>Overall Pot</th><th>Target</th>
+          <th>MTD</th><th>LMTD</th><th>MoM%</th><th>Growth%</th>
+          <th>Ach%</th><th>Status</th><th>Calls</th><th>Visits</th>
+        </tr>
+      </thead>
+      <tbody id="mpTbody"></tbody>
+    </table>
+  </div>
+  <div id="mpPagination" class="pg-wrap"></div>
+</section>
 
-    <!-- ── OVERVIEW ─────────────────────────────────────── -->
-    <div id="page-overview" class="page active">
-      <div class="page-header">
-        <h2>Project Overview</h2>
-        <p>Live rollup within your zone. All numbers direct from master sheet.</p>
-      </div>
+<!-- ======= TEAM PERFORMANCE (replaces AM Performance) ======= -->
+<section class="tab-pane" id="pane-team">
+  <h2 class="section-title">Team Performance</h2>
+  <p class="section-sub">All team heads from ZH to AM — click Details to drill into their partner list.</p>
 
-      <!-- Top 3 cards -->
-      <div class="metric-grid" style="margin-bottom:14px;">
-        <div class="metric-card" style="border-left:3px solid var(--id-red);">
-          <div class="mc-label">Total Partners</div>
-          <div class="mc-value" id="ovTotalPartners">—</div>
-          <div class="mc-sub">
-            <span class="badge badge-green" id="ovActive">Active: 0</span>
-            <span class="badge badge-red" id="ovInactive">Inactive: 0</span>
-          </div>
-        </div>
-        <div class="metric-card" style="border-left:3px solid var(--green);">
-          <div class="mc-label">Business (MTD May'26)</div>
-          <div class="mc-value rupee" id="ovMTD">0</div>
-          <div class="mc-sub">
-            <span class="badge badge-grey" id="ovMOM">MoM: +0%</span>
-            <span class="badge badge-grey" id="ovAch">Ach: 0%</span>
-          </div>
-        </div>
-        <div class="metric-card" style="border-left:3px solid var(--amber);">
-          <div class="mc-label">Engagement</div>
-          <div class="mc-value" id="ovEngagement">0 / 0</div>
-          <div class="mc-sub">
-            <span class="badge badge-blue" id="ovConn">Connected: 0</span>
-            <span class="badge badge-amber" id="ovNotConn">Not: 0</span>
-          </div>
-        </div>
-      </div>
+  <!-- Filters -->
+  <div class="filter-bar">
+    <input type="text" id="tpSearch" placeholder="Search name…" oninput="tpFilter()"/>
+    <select id="tpZone"  onchange="tpFilter()"><option value="">All Zones</option></select>
+    <select id="tpState" onchange="tpFilter()"><option value="">All States</option></select>
+    <select id="tpRole"  onchange="tpFilter()">
+      <option value="">All Roles (ZH → AM)</option>
+      <option>ZH</option><option>RH</option><option>SH</option><option>RM</option><option>AM</option>
+    </select>
+    <button class="btn-clear" onclick="tpClear()">Clear</button>
+  </div>
 
-      <!-- 6 small metric cards -->
-      <div class="metric-grid sm" style="margin-bottom:14px;">
-        <div class="metric-card card-sm">
-          <div class="mc-label">MTD (May'26)</div>
-          <div class="mc-value rupee" id="ovMTD2" style="font-size:20px;">0</div>
-          <div class="mc-sub" style="font-size:11px;color:var(--green)" id="ovMTDvsLMTD">▲ +0% vs last month</div>
-        </div>
-        <div class="metric-card card-sm">
-          <div class="mc-label">LMTD (Apr'26)</div>
-          <div class="mc-value rupee" id="ovLMTD" style="font-size:20px;">0</div>
-          <div class="mc-sub" style="font-size:11px;color:var(--text2)">Previous month</div>
-        </div>
-        <div class="metric-card card-sm" style="border-left:2px solid var(--purple);">
-          <div class="mc-label">Max Potential</div>
-          <div class="mc-value rupee" id="ovMaxPot" style="font-size:20px;">0</div>
-          <div class="mc-sub" style="font-size:11px;color:var(--text2)">Best month × total</div>
-        </div>
-        <div class="metric-card card-sm">
-          <div class="mc-label">Overall Potential</div>
-          <div class="mc-value rupee" id="ovOPot" style="font-size:20px;">0</div>
-          <div class="mc-sub" style="font-size:11px;color:var(--text2)">All platforms</div>
-        </div>
-        <div class="metric-card card-sm">
-          <div class="mc-label">Target (May)</div>
-          <div class="mc-value rupee" id="ovTarget" style="font-size:20px;">0</div>
-          <div class="mc-sub" style="font-size:11px;color:var(--text2)">Monthly target</div>
-        </div>
-        <div class="metric-card card-sm" style="border-left:2px solid var(--red);">
-          <div class="mc-label">Max-Pot Ach.</div>
-          <div class="mc-value" id="ovMaxAch" style="font-size:20px;">0%</div>
-          <div class="mc-sub" style="font-size:11px;color:var(--text2)">MTD ÷ Max Pot</div>
-        </div>
-      </div>
+  <div id="tpGrid" class="team-grid">
+    <div class="empty-state"><div class="es-icon">⏳</div><div class="es-msg">Loading team…</div></div>
+  </div>
+</section>
 
-      <!-- Calls / Visits / Growth / Degrowth -->
-      <div class="metric-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px;">
-        <div class="metric-card card-sm" style="border-left:2px solid var(--green);">
-          <div class="mc-label">Calls</div>
-          <div class="mc-value green" id="ovCalls" style="font-size:22px;color:var(--green)">0</div>
-        </div>
-        <div class="metric-card card-sm" style="border-left:2px solid var(--red);">
-          <div class="mc-label">Visits</div>
-          <div class="mc-value" id="ovVisits" style="font-size:22px;color:var(--red)">0</div>
-        </div>
-        <div class="metric-card card-sm" style="border-left:2px solid var(--green);">
-          <div class="mc-label">Growth Partners</div>
-          <div class="mc-value green" id="ovGrowth" style="font-size:22px;color:var(--green)">0</div>
-        </div>
-        <div class="metric-card card-sm" style="border-left:2px solid var(--red);">
-          <div class="mc-label">Degrowth Partners</div>
-          <div class="mc-value" id="ovDegrowth" style="font-size:22px;color:var(--red)">0</div>
-        </div>
-      </div>
-
-      <!-- Donut Charts -->
-      <div class="chart-grid">
-        <div class="chart-card">
-          <div class="cc-title">Active vs Inactive</div>
-          <div class="donut-wrap" id="chartActiveInactive"></div>
-        </div>
-        <div class="chart-card">
-          <div class="cc-title">Connected vs Not Connected</div>
-          <div class="donut-wrap" id="chartConnected"></div>
-        </div>
-        <div class="chart-card">
-          <div class="cc-title">Growth vs Degrowth</div>
-          <div class="donut-wrap" id="chartGrowth"></div>
-        </div>
-      </div>
-    </div><!-- /overview -->
-
-    <!-- ── ALL PARTNERS ──────────────────────────────────── -->
-    <div id="page-allPartners" class="page">
-      <div class="page-header">
-        <h2>All Partners</h2>
-        <p>Complete partner list within your scope. Click View to see 14-month trend.</p>
-      </div>
-      <div class="filter-bar">
-        <input type="text" id="apSearch" placeholder="Search name / GID / city…">
-        <select id="apState"><option value="">All states</option></select>
-        <select id="apCity"><option value="">All cities</option></select>
-        <select id="apOwner"><option value="">All owners</option></select>
-        <select id="apRole"><option value="">All roles</option></select>
-        <select id="apStatus"><option value="">All status</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
-        <select id="apTrend"><option value="">All trend</option><option value="growth">Growth</option><option value="degrowth">Degrowth</option></select>
-        <select id="apConn"><option value="">All connect</option><option value="connected">Connected</option><option value="not">Not Connected</option></select>
-        <select id="apMTD"><option value="">All MTD ranges</option></select>
-        <button class="btn btn-outline" id="apClear">Clear</button>
-        <button class="btn btn-primary" id="apExport">Export CSV</button>
-      </div>
-      <div style="font-size:13px;color:var(--text2);margin-bottom:10px;" id="apCount">0 of 0 partners</div>
-      <div class="table-wrap">
-        <table class="tbl" id="apTable">
-          <thead>
-            <tr>
-              <th class="sortable" data-col="name">Partner</th>
-              <th>City / State</th>
-              <th>Owner</th>
-              <th class="sortable" data-col="maxPot">Max Pot.</th>
-              <th class="sortable" data-col="oPot">Overall Pot.</th>
-              <th class="sortable" data-col="target">Target</th>
-              <th class="sortable" data-col="mtd">MTD (May'26)</th>
-              <th class="sortable" data-col="lmtd">LMTD (Apr'26)</th>
-              <th class="sortable" data-col="mom">MoM%</th>
-              <th>Growth</th>
-              <th>Status</th>
-              <th>Connect</th>
-              <th>Calls</th>
-              <th>Visits</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="apBody"></tbody>
-        </table>
-        <div class="pagination" id="apPagination"></div>
-      </div>
-    </div><!-- /allPartners -->
-
-    <!-- ── MY PARTNERS ───────────────────────────────────── -->
-    <div id="page-myPartners" class="page">
-      <div class="page-header">
-        <h2>My Partners</h2>
-        <p>Partners directly assigned to you.</p>
-      </div>
-      <div class="filter-bar">
-        <input type="text" id="mpSearch" placeholder="Search name / GID…">
-        <select id="mpStatus"><option value="">All status</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
-        <select id="mpTrend"><option value="">All trend</option><option value="growth">Growth</option><option value="degrowth">Degrowth</option></select>
-      </div>
-      <div class="table-wrap">
-        <table class="tbl" id="mpTable">
-          <thead>
-            <tr>
-              <th>Partner</th>
-              <th>City / State</th>
-              <th class="sortable" data-col="maxPot">Max Pot.</th>
-              <th class="sortable" data-col="oPot">Overall Pot.</th>
-              <th class="sortable" data-col="target">Target</th>
-              <th class="sortable" data-col="mtd">MTD (May'26)</th>
-              <th class="sortable" data-col="lmtd">LMTD (Apr'26)</th>
-              <th>Growth</th>
-              <th>Status</th>
-              <th>Calls</th>
-              <th>Visits</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="mpBody"></tbody>
-        </table>
-        <div class="pagination" id="mpPagination"></div>
-      </div>
-    </div><!-- /myPartners -->
-
-    <!-- ── AM PERFORMANCE ─────────────────────────────────── -->
-    <div id="page-amPerf" class="page">
-      <div class="page-header">
-        <h2>AM Performance</h2>
-        <p>Every AM in your zone. Click Details to drill into all assigned partners.</p>
-      </div>
-      <div class="filter-bar">
-        <input type="text" id="amSearch" placeholder="Search AM name…">
-        <select id="amSort">
-          <option value="mtd_desc">Sort: MTD High→Low</option>
-          <option value="mtd_asc">Sort: MTD Low→High</option>
-          <option value="name_asc">Sort: Name A→Z</option>
-          <option value="count_desc">Sort: Most Partners</option>
-        </select>
-        <select id="amFilter"><option value="">All AMs</option></select>
-      </div>
-      <div class="team-grid" id="amGrid"></div>
-      <div class="empty-state" id="amEmpty" style="display:none">
-        <div class="es-icon">👥</div>
-        <p>No AMs match.</p>
-      </div>
-    </div><!-- /amPerf -->
-
-    <!-- ── TEAM PERFORMANCE ──────────────────────────────── -->
-    <div id="page-teamPerf" class="page">
-      <div class="page-header">
-        <h2>Team Performance</h2>
-        <p id="teamPerfSub">All team members in your zone.</p>
-      </div>
-      <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:12px;" id="teamPerfCount">— MEMBERS</div>
-      <div class="team-grid" id="teamGrid"></div>
-    </div><!-- /teamPerf -->
-
-    <!-- ── TELE-RM ────────────────────────────────────────── -->
-    <div id="page-teleRM" class="page">
-      <div class="page-header">
-        <h2>📞 Tele-RM Dashboard</h2>
-        <p>Tele-RM team performance — completely separate from 5 main zones.</p>
-      </div>
-      <div class="metric-grid" style="margin-bottom:14px;" id="teleOverview"></div>
-      <div class="team-grid" id="teleTeamGrid"></div>
-    </div><!-- /teleRM -->
-
-    <!-- ── DAILY RUN RATE ─────────────────────────────────── -->
-    <div id="page-dailyRR" class="page">
-      <div class="page-header">
-        <h2>Daily Run Rate</h2>
-        <p>Track how each owner is pacing towards their monthly target.</p>
-      </div>
-      <div class="drr-grid" id="drrGrid"></div>
-    </div><!-- /dailyRR -->
-
-  </div><!-- #main -->
-</div><!-- #appShell -->
-
-<!-- ── VIEW MODAL (Partner Detail) ──────────────────────── -->
-<div class="modal-overlay" id="partnerModal">
+<!-- ======= VIEW MODAL ======= -->
+<div class="modal-overlay hidden" id="viewModal">
   <div class="modal-box">
     <div class="modal-header">
       <div>
-        <div class="mh-title" id="modalName">—</div>
-        <div class="mh-gid" id="modalGID">—</div>
+        <div class="modal-partner-name" id="vmName">—</div>
+        <div class="modal-partner-meta" id="vmMeta">—</div>
       </div>
-      <button class="modal-close" id="modalClose">✕</button>
+      <button class="modal-close" onclick="closeViewModal()">✕</button>
     </div>
-    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-body" id="vmBody"></div>
   </div>
 </div>
 
-<!-- ── TEAM DRILL MODAL ──────────────────────────────────── -->
-<div class="modal-overlay" id="teamModal">
-  <div class="modal-box" style="max-width:1100px;">
+<!-- ======= TEAM DRILL MODAL ======= -->
+<div class="modal-overlay hidden" id="drillModal">
+  <div class="modal-box" style="max-width:900px;">
     <div class="modal-header">
       <div>
-        <div class="mh-title" id="tmModalName">—</div>
-        <div class="mh-gid" id="tmModalSub">—</div>
+        <div class="modal-partner-name" id="drillTitle">—</div>
+        <div class="modal-partner-meta" id="drillMeta">—</div>
       </div>
-      <button class="modal-close" id="tmModalClose">✕</button>
+      <button class="modal-close" onclick="closeDrillModal()">✕</button>
     </div>
-    <div class="modal-body" id="tmModalBody"></div>
+    <div class="modal-body" id="drillBody"></div>
   </div>
 </div>
 

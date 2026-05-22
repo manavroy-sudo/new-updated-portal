@@ -1,993 +1,501 @@
-/* ============================================================
-   Partner Engage Portal — app.js v13
-   Complete logic: login, overview, partner table, AM/team cards,
-   View modal with 14-month trend, Tele-RM tab, daily run rate
-   ============================================================ */
-
+// ====================================================================
+// app.js v14 — InsuranceDekho ZH/SH/RM/AM Dashboard
+// Changes v14:
+//  1. VIEW button on every partner row → opens View modal with
+//     14-month chart, KPI tiles, highlight box (matching Pic 3)
+//  2. % values: use pre-formatted growthFmt / targetAchFmt from server
+//  3. Team Performance tab replaces AM Performance — shows ALL heads
+//     ZH→AM with filter bar (name, zone, state, role)
+//  4. Daily Run Rate tab REMOVED
+//  5. AM Performance tab REMOVED
+// ====================================================================
 (function(){
 'use strict';
 
-var API = (typeof API_URL !== 'undefined') ? API_URL : '';
-var DATA = null;  // Full response from getData
-var USER = null;  // Logged-in user object
-var ALL_PARTNERS = [];
-var MY_PARTNERS  = [];
-var AP_PAGE = 1, MP_PAGE = 1;
-var AP_SORT = {col:'name',dir:'asc'};
-var AP_FILTERS = {};
-var ITEMS_PER_PAGE = 50;
+// ── Session ──────────────────────────────────────────────────────────
+var peUser = JSON.parse(sessionStorage.getItem('peUser')||'null');
+if(!peUser){location.href='index.html';return;}
 
-// Month labels
-var MONTHS = ["Apr'25","May'25","Jun'25","Jul'25","Aug'25","Sep'25",
-              "Oct'25","Nov'25","Dec'25","Jan'26","Feb'26","Mar'26","Apr'26"];
-var MONTH_KEYS = ['apr25','may25','jun25','jul25','aug25','sep25',
-                  'oct25','nov25','dec25','jan26','feb26','mar26','apr26'];
+// ── State ─────────────────────────────────────────────────────────────
+var DASH        = null; // full dashboard payload
+var AP_FILTERED = [];
+var MP_FILTERED = [];
+var TP_ALL      = [];
+var AP_PAGE     = 1;
+var MP_PAGE     = 1;
+var PAGE_SIZE   = 50;
+var vmChart     = null;
 
-// ── Utilities ────────────────────────────────────────────────
-function $(id){ return document.getElementById(id); }
-function safe(v){ return (v===null||v===undefined)?'':String(v); }
+var MONTH_LABELS = ["Apr'25","May'25","Jun'25","Jul'25","Aug'25","Sep'25",
+                    "Oct'25","Nov'25","Dec'25","Jan'26","Feb'26","Mar'26","Apr'26","May'26"];
 
-function fmt(val){
-  var v=Number(val)||0;
-  if(v===0) return '₹0';
-  if(Math.abs(v)>=10000000) return '₹'+(v/10000000).toFixed(2)+' Cr';
-  if(Math.abs(v)>=100000)   return '₹'+(v/100000).toFixed(2)+' L';
-  if(Math.abs(v)>=1000)     return '₹'+(v/1000).toFixed(1)+' K';
-  return '₹'+Math.round(v).toLocaleString('en-IN');
+// ── Helpers ───────────────────────────────────────────────────────────
+var $ = function(id){return document.getElementById(id);};
+function fmtINR(n){
+  if(!n||!isFinite(n)||n===0)return '₹0';
+  if(n>=1e7)return '₹'+(n/1e7).toFixed(2)+' Cr';
+  if(n>=1e5)return '₹'+(n/1e5).toFixed(2)+'L';
+  if(n>=1e3)return '₹'+(n/1e3).toFixed(1)+'K';
+  return '₹'+Math.round(n).toLocaleString('en-IN');
+}
+function fmtShort(n){
+  if(!n||!isFinite(n)||n===0)return '0';
+  if(n>=1e7)return (n/1e7).toFixed(1)+'Cr';
+  if(n>=1e5)return (n/1e5).toFixed(1)+'L';
+  if(n>=1e3)return (n/1e3).toFixed(0)+'K';
+  return Math.round(n)+'';
+}
+function safe(s){return String(s==null?'':s);}
+function esc(s){return safe(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function growthPill(fmt){
+  var n=parseFloat(fmt)||0;
+  var cls=n>0?'pill-up':n<0?'pill-dn':'pill-flat';
+  return '<span class="pill '+cls+'">'+(n>0?'+':'')+fmt+'</span>';
+}
+function achColor(ach){
+  if(ach>=100)return 'val-green';
+  if(ach>=50) return 'val-amber';
+  return 'val-red';
+}
+function momPct(mtd,lmtd){
+  if(!lmtd)return mtd>0?'+100%':'—';
+  var p=Math.round((mtd-lmtd)/lmtd*100);
+  return (p>=0?'+':'')+p+'%';
 }
 
-function fmtN(val){
-  var v=Number(val)||0;
-  return v.toLocaleString('en-IN');
+// ── Status Bar ────────────────────────────────────────────────────────
+function status(msg,type){
+  var sb=$('statusBar');
+  sb.className='status-bar '+(type||'loading');
+  sb.innerHTML=(type==='loading'?'<div class="spinner"></div>':'')+msg;
+}
+function hideStatus(){$('statusBar').className='status-bar hidden';}
+
+// ── API Call ──────────────────────────────────────────────────────────
+function callApi(action, payload, cb){
+  google.script.run
+    .withSuccessHandler(function(r){cb(null,r);})
+    .withFailureHandler(function(e){cb(e.message||'Error',null);})
+    .callServer(action, payload);
 }
 
-function fmtPct(val){ return (Number(val)||0)+'%'; }
+// ── Init ──────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded',function(){
+  $('userName').textContent = peUser.name||'—';
+  $('userRole').textContent = peUser.role||'—';
 
-function pctClass(v){
-  v=Number(v)||0;
-  if(v>0) return 'val-green';
-  if(v<0) return 'val-red';
-  return 'val-dim';
-}
-
-function statusPill(active){
-  var a=String(active||'').toLowerCase().trim();
-  var isActive=(a==='active'||a==='1'||a==='yes');
-  return isActive
-    ? '<span class="pill pill-active">● Active</span>'
-    : '<span class="pill pill-inactive">○ Inactive</span>';
-}
-
-function growthPill(growth){
-  var g=String(growth||'').toLowerCase();
-  var gn=parseFloat(String(growth||'').replace(/%/g,'').trim())||0;
-  if(gn>0) return '<span class="pill pill-growth" style="font-weight:700">▲ '+String(growth)+'</span>';
-  if(gn<0) return '<span class="pill pill-degrowth" style="font-weight:700">▼ '+String(growth)+'</span>';
-  return '<span class="pill pill-inactive">— Flat</span>';
-  return '<span class="pill pill-inactive">— Flat</span>';
-}
-
-function connPill(p){
-  return (p.calls>0||p.visits>0)
-    ? '<span class="pill pill-conn">● Connected</span>'
-    : '<span class="pill pill-notconn">○ Not Connected</span>';
-}
-
-function callApi(action,params,cb){
-  var url=API+'?action='+encodeURIComponent(action);
-  if(params) Object.keys(params).forEach(function(k){
-    url+='&'+encodeURIComponent(k)+'='+encodeURIComponent(params[k]);
-  });
-  var cbName='cb_'+Date.now()+'_'+Math.floor(Math.random()*9999);
-  window[cbName]=function(data){
-    delete window[cbName];
-    var s=document.getElementById('jsonp_'+cbName);
-    if(s) s.remove();
-    cb(null,data);
-  };
-  url+='&callback='+cbName;
-  var s=document.createElement('script');
-  s.id='jsonp_'+cbName;
-  s.src=url;
-  s.onerror=function(){cb(new Error('Network error'));};
-  document.head.appendChild(s);
-}
-
-function setLoading(show,msg){
-  $('loadingScreen').style.display=show?'flex':'none';
-  if(msg) $('loadingMsg').textContent=msg;
-}
-
-// ── Login ───────────────────────────────────────────────────
-function initLogin(){
-  $('loginScreen').style.display='flex';
-  $('appShell').style.display='none';
-  $('btnLogin').addEventListener('click',doLogin);
-  $('loginPass').addEventListener('keydown',function(e){ if(e.key==='Enter') doLogin(); });
-  $('loginGID').addEventListener('keydown',function(e){ if(e.key==='Enter') doLogin(); });
-}
-
-function doLogin(){
-  var gid=$('loginGID').value.trim();
-  var pass=$('loginPass').value;
-  if(!gid){ showError('Please enter your GID'); return; }
-  $('loginError').style.display='none';
-  $('btnLogin').textContent='Signing in…';
-  callApi('login',{uid:gid,password:pass},function(err,res){
-    $('btnLogin').textContent='Sign In';
-    if(err||!res||!res.success){
-      showError((res&&res.message)||'Login failed. Check your GID and password.');
-      return;
-    }
-    USER=res.user;
-    localStorage.setItem('pe_user',JSON.stringify(USER));
-    loadDashboard();
-  });
-}
-
-function showError(msg){
-  var el=$('loginError');
-  el.textContent=msg;
-  el.style.display='block';
-}
-
-function doLogout(){
-  localStorage.removeItem('pe_user');
-  USER=null; DATA=null; ALL_PARTNERS=[];
-  $('loginScreen').style.display='flex';
-  $('appShell').style.display='none';
-  $('loginGID').value='';
-  $('loginPass').value='';
-}
-
-// ── Dashboard Load ───────────────────────────────────────────
-function loadDashboard(){
-  $('loginScreen').style.display='none';
-  setLoading(true,'Loading your dashboard…');
-
-  var action = (USER.role==='MASTER') ? 'getMaster' : 'getData';
-
-  callApi(action,{uid:USER.gid},function(err,res){
-    setLoading(false);
-    if(err||!res||!res.success){
-      showError((res&&res.message)||'Failed to load data.');
-      $('loginScreen').style.display='flex';
-      return;
-    }
-    DATA=res;
-    $('appShell').style.display='block';
-    setupHeader();
-    setupNav();
-    buildAllData();
-    showTab('overview');
-  });
-}
-
-function setupHeader(){
-  $('hdrName').textContent=USER.name||'—';
-  $('hdrRole').textContent=USER.role+(USER.zone?' · '+USER.zone:'');
-  $('btnLogout').addEventListener('click',doLogout);
-}
-
-function setupNav(){
-  var role=(USER.role||'').toUpperCase();
-  var zone=(USER.zone||'').toLowerCase();
-  var isTele = zone.indexOf('tele')>=0;
-  var isZH   = role==='ZH'||role==='MASTER';
-  var isSH   = role==='SH'||role==='RH';
-
-  // Hide/show tabs based on role
-  if(isTele){
-    $('tabTeleRM').style.display=(role==='ZH'?'':'none');
-    $('tabAMPerf').style.display='';
-    $('tabTeamPerf').style.display='';
-  } else if(isZH||isSH){
-    $('tabAMPerf').style.display='';
-    $('tabTeamPerf').style.display='';
-  } else {
-    // AM/RM
-    $('tabAMPerf').style.display='none';
-    $('tabTeamPerf').style.display='none';
+  // Role-based tab visibility
+  var role=(peUser.role||'').toUpperCase();
+  if(role==='AM'){
+    var m=$('tabMine');
+    if(m){m.style.display='none';}// AM's partners = All Partners
   }
 
-  document.querySelectorAll('.nav-tab').forEach(function(btn){
+  // Tab switching
+  document.querySelectorAll('.tab').forEach(function(btn){
     btn.addEventListener('click',function(){
-      showTab(this.dataset.tab);
+      document.querySelectorAll('.tab').forEach(function(b){b.classList.remove('active');});
+      document.querySelectorAll('.tab-pane').forEach(function(p){p.classList.remove('active');});
+      btn.classList.add('active');
+      var pane=$('pane-'+btn.dataset.tab);
+      if(pane) pane.classList.add('active');
     });
   });
-}
 
-function showTab(tab){
-  document.querySelectorAll('.nav-tab').forEach(function(b){
-    b.classList.toggle('active', b.dataset.tab===tab);
-  });
-  document.querySelectorAll('.page').forEach(function(p){
-    p.classList.toggle('active', p.id==='page-'+tab);
-  });
-  if(tab==='allPartners') renderAllPartners();
-  if(tab==='myPartners')  renderMyPartners();
-  if(tab==='amPerf')      renderAMPerf();
-  if(tab==='teamPerf')    renderTeamPerf();
-  if(tab==='teleRM')      renderTeleRM();
-  if(tab==='dailyRR')     renderDailyRR();
-}
-
-// ── Build data from API response ────────────────────────────
-function buildAllData(){
-  var role=USER.role.toUpperCase();
-  var name=USER.name||'';
-
-  if(DATA.main){
-    // MASTER view
-    ALL_PARTNERS = DATA.main.partners||[];
-    MY_PARTNERS  = ALL_PARTNERS;
-  } else {
-    ALL_PARTNERS = DATA.partners||[];
-    // MY PARTNERS = where ownerName matches current user
-    MY_PARTNERS  = ALL_PARTNERS.filter(function(p){
-      return p.oName===name || p.oEmp===USER.empId;
-    });
-    if(MY_PARTNERS.length===0&&role==='ZH')MY_PARTNERS=ALL_PARTNERS.filter(function(p){return p.oName===name;});
-  }
-
-  buildOverview();
-  populateFilters();
-}
-
-// ── Overview ────────────────────────────────────────────────
-function buildOverview(){
-  var s = DATA.summary || (DATA.main&&DATA.main.summary) || {};
-
-  $('ovTotalPartners').textContent = fmtN(s.total||0);
-  $('ovActive').textContent        = 'Active: '+fmtN(s.active||0);
-  $('ovInactive').textContent      = 'Inactive: '+fmtN(s.inactive||0);
-
-  $('ovMTD').textContent   = fmt(s.mtd||0).replace('₹','');
-  $('ovMTD2').textContent  = fmt(s.mtd||0).replace('₹','');
-  $('ovLMTD').textContent  = fmt(s.lmtd||0).replace('₹','');
-  $('ovMaxPot').textContent=fmt(s.maxPot||0).replace('₹','');var _mp=$('ovMaxPot');if(_mp)_mp.style.color='#ffab00';
-  $('ovOPot').textContent  = fmt(s.oPot||0).replace('₹','');
-  $('ovTarget').textContent= fmt(s.target||0).replace('₹','');
-  $('ovMaxAch').textContent= fmtPct(s.maxAch||0);
-
-  var mom=s.mom||0;
-  $('ovMOM').textContent='MoM: '+(mom>=0?'+':'')+mom+'%';
-  $('ovAch').textContent='Ach: '+(s.ach||0)+'%';
-  $('ovMTDvsLMTD').textContent=(mom>=0?'▲ +':'▼ ')+mom+'% vs last month';
-  $('ovMTDvsLMTD').className=mom>=0?'up':'down';
-
-  $('ovEngagement').textContent=fmtN(s.connected||0)+' / '+fmtN(s.total||0);
-  $('ovConn').textContent='Connected: '+fmtN(s.connected||0);
-  $('ovNotConn').textContent='Not: '+fmtN(s.notConn||0);
-
-  $('ovCalls').textContent   = fmtN(s.calls||0);
-  $('ovVisits').textContent  = fmtN(s.visits||0);
-  $('ovGrowth').textContent  = fmtN(s.growth||0);
-  $('ovDegrowth').textContent= fmtN(s.degrowth||0);
-
-  // Donut charts
-  buildDonut('chartActiveInactive',
-    [s.active||0, s.inactive||0],
-    ['Active','Inactive'],
-    ['var(--green)','var(--text3)']
-  );
-  buildDonut('chartConnected',
-    [s.connected||0, s.notConn||0],
-    ['Connected','Not Connected'],
-    ['var(--blue)','var(--amber)']
-  );
-  buildDonut('chartGrowth',
-    [s.growth||0, s.degrowth||0],
-    ['Growth','Degrowth'],
-    ['var(--green)','var(--red)']
-  );
-}
-
-function buildDonut(containerId, values, labels, colors){
-  var el=$(containerId);
-  if(!el) return;
-  var total=values.reduce(function(a,b){return a+b;},0)||1;
-  var r=50, cx=60, cy=60, sw=16;
-  var circumference=2*Math.PI*r;
-  var svgParts='', offset=circumference*0.25; // start from top
-
-  values.forEach(function(v,i){
-    var slice=(v/total)*circumference;
-    var dash=slice+' '+(circumference-slice);
-    svgParts+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+colors[i]+'"'+
-              ' stroke-width="'+sw+'" stroke-dasharray="'+dash+'" stroke-dashoffset="'+offset+'"'+
-              ' stroke-linecap="butt" style="transition:stroke-dashoffset .6s ease;" />';
-    offset-=slice;
+  // Logout
+  $('btnLogout').addEventListener('click',function(){
+    sessionStorage.clear();location.href='index.html';
   });
 
-  var svgHTML='<svg class="donut-svg" viewBox="0 0 120 120" width="100" height="100">'+
-    '<circle cx="60" cy="60" r="50" fill="none" stroke="var(--border)" stroke-width="16"/>'+
-    svgParts+
-    '<text x="60" y="56" text-anchor="middle" fill="var(--text)" font-size="14" font-weight="700" font-family="DM Sans,sans-serif">'+
-    (total===1&&values[0]===0&&values[1]===0?'0':fmtN(values[0]))+'</text>'+
-    '<text x="60" y="70" text-anchor="middle" fill="var(--text2)" font-size="9" font-family="DM Sans,sans-serif">'+
-    (labels[0]||'')+'</text>'+
-    '</svg>';
-
-  var legendHTML='<div class="donut-legend">';
-  values.forEach(function(v,i){
-    var pct2=total>0?Math.round(v*100/total):0;
-    legendHTML+='<div class="donut-legend-item">'+
-      '<div class="donut-legend-label">'+
-        '<div class="donut-legend-dot" style="background:'+colors[i]+'"></div>'+
-        '<span>'+labels[i]+'</span>'+
-      '</div>'+
-      '<div><span class="donut-legend-val" style="color:'+colors[i]+'">'+fmtN(v)+'</span>'+
-      ' <span style="color:var(--text3);font-size:11px;">('+pct2+'%)</span></div>'+
-      '</div>';
+  // Close modals on backdrop click
+  $('viewModal').addEventListener('click',function(e){
+    if(e.target===$('viewModal')) closeViewModal();
   });
-  legendHTML+='</div>';
-
-  el.innerHTML=svgHTML+legendHTML;
-}
-
-// ── Populate filter dropdowns ────────────────────────────────
-function populateFilters(){
-  var cities = DATA.cities||[];
-  var states = DATA.states||[];
-
-  // City
-  var cityEl=$('apCity');
-  cities.forEach(function(c){
-    var o=document.createElement('option');
-    o.value=c; o.textContent=c;
-    cityEl.appendChild(o);
+  $('drillModal').addEventListener('click',function(e){
+    if(e.target===$('drillModal')) closeDrillModal();
   });
 
-  // State
-  var stateEl=$('apState');
-  states.forEach(function(s){
-    var o=document.createElement('option');
-    o.value=s; o.textContent=s;
-    stateEl.appendChild(o);
-  });
+  loadDashboard();
+});
 
-  // Owner
-  var ownerEl=$('apOwner');
-  var owners={};
-  ALL_PARTNERS.forEach(function(p){ if(p.oName) owners[p.oName]=p.oRole||''; });
-  Object.keys(owners).sort().forEach(function(n){
-    var o=document.createElement('option');
-    o.value=n; o.textContent=n+' ('+owners[n]+')';
-    ownerEl.appendChild(o);
-  });
-
-  // Role
-  var roleEl=$('apRole');
-  var roles={};
-  ALL_PARTNERS.forEach(function(p){ if(p.oRole) roles[p.oRole]=1; });
-  Object.keys(roles).sort().forEach(function(r){
-    var o=document.createElement('option');
-    o.value=r; o.textContent=r;
-    roleEl.appendChild(o);
-  });
-
-  // AM filter for AM Performance
-  var amEl=$('amFilter');
-  var ams={};
-  ALL_PARTNERS.forEach(function(p){
-    if((p.oRole||'').toUpperCase()==='AM'||(p.oRole||'').toUpperCase()==='RM') ams[p.oName]=1;
-  });
-  Object.keys(ams).sort().forEach(function(n){
-    var o=document.createElement('option');
-    o.value=n; o.textContent=n;
-    amEl.appendChild(o);
-  });
-
-  // Filter event listeners
-  ['apSearch','apState','apCity','apOwner','apRole','apStatus','apTrend','apConn','apMTD'].forEach(function(id){
-    var el=$(id);
-    if(el) el.addEventListener('input',function(){ AP_PAGE=1; renderAllPartners(); });
-  });
-  $('apClear').addEventListener('click',function(){
-    ['apSearch','apState','apCity','apOwner','apRole','apStatus','apTrend','apConn','apMTD'].forEach(function(id){
-      var el=$(id); if(el) el.value='';
-    });
-    AP_PAGE=1; renderAllPartners();
-  });
-  $('apExport').addEventListener('click', exportCSV);
-
-  // AM Performance filters
-  ['amSearch','amSort','amFilter'].forEach(function(id){
-    var el=$(id); if(el) el.addEventListener('input',renderAMPerf);
-  });
-
-  // My Partners filters
-  ['mpSearch','mpStatus','mpTrend'].forEach(function(id){
-    var el=$(id); if(el) el.addEventListener('input',function(){ MP_PAGE=1; renderMyPartners(); });
-  });
-
-  // Table sort headers
-  document.querySelectorAll('.tbl th.sortable').forEach(function(th){
-    th.addEventListener('click',function(){
-      var col=this.dataset.col;
-      var tblId=this.closest('table').id;
-      if(tblId==='apTable'){
-        if(AP_SORT.col===col) AP_SORT.dir=AP_SORT.dir==='asc'?'desc':'asc';
-        else{AP_SORT.col=col;AP_SORT.dir='desc';}
-        AP_PAGE=1;
-        renderAllPartners();
-      }
-    });
-  });
-}
-
-// ── Filter & sort partners ───────────────────────────────────
-function applyFilters(partners){
-  var search=($('apSearch')&&$('apSearch').value||'').toLowerCase().trim();
-  var state =$('apState')&&$('apState').value||'';
-  var city  =$('apCity')&&$('apCity').value||'';
-  var owner =$('apOwner')&&$('apOwner').value||'';
-  var role  =$('apRole')&&$('apRole').value||'';
-  var status=$('apStatus')&&$('apStatus').value||'';
-  var trend =$('apTrend')&&$('apTrend').value||'';
-  var conn  =$('apConn')&&$('apConn').value||'';
-
-  return partners.filter(function(p){
-    if(search && !(
-      (p.name||'').toLowerCase().indexOf(search)>=0 ||
-      (p.gid||'').toLowerCase().indexOf(search)>=0  ||
-      (p.city||'').toLowerCase().indexOf(search)>=0
-    )) return false;
-    if(state && p.state!==state) return false;
-    if(city  && p.city!==city)   return false;
-    if(owner && p.oName!==owner) return false;
-    if(role  && p.oRole!==role)  return false;
-    if(status){
-      var a=String(p.active||'').toLowerCase();
-      var isAct=(a==='active');
-      if(status==='active'&&!isAct) return false;
-      if(status==='inactive'&&isAct) return false;
+// ── Load Data ─────────────────────────────────────────────────────────
+function loadDashboard(){
+  status('Loading dashboard data…','loading');
+  callApi('dashboard',{user:peUser},function(err,res){
+    if(err||!res||!res.success){
+      status('Error loading data: '+(err||res&&res.message),'error');
+      return;
     }
-    if(trend){
-      var g=String(p.growth||'').toLowerCase();
-      var gn2=parseFloat(String(p.growth||'').replace(/%/g,'').trim())||0;
-      if(trend==='growth'&&gn2<=0) return false;
-      if(trend==='degrowth'&&gn2>=0) return false;
-    }
-    if(conn){
-      var isConn=(p.calls>0||p.visits>0);
-      if(conn==='connected'&&!isConn) return false;
-      if(conn==='not'&&isConn) return false;
-    }
-    return true;
+    DASH = res;
+    hideStatus();
+    renderOverview(res);
+    buildAllPartnersFilters(res.partners);
+    buildMyPartnersFilters(res.partners);
+    buildTeamFilters(res.team);
+    apply();
   });
 }
 
-function sortPartners(partners, sort){
-  var dir=sort.dir==='asc'?1:-1;
-  return partners.slice().sort(function(a,b){
-    var av=a[sort.col]||0, bv=b[sort.col]||0;
-    if(sort.col==='name'){ av=a.name||''; bv=b.name||''; }
-    if(typeof av==='string') return av.localeCompare(bv)*dir;
-    return (Number(av)-Number(bv))*dir;
-  });
-}
-
-// ── Render All Partners ─────────────────────────────────────
-function renderAllPartners(){
-  var filtered=applyFilters(ALL_PARTNERS);
-  var sorted=sortPartners(filtered, AP_SORT);
-
-  $('apCount').textContent=filtered.length+' of '+ALL_PARTNERS.length+' partners';
-
-  var totalPages=Math.max(1,Math.ceil(sorted.length/ITEMS_PER_PAGE));
-  if(AP_PAGE>totalPages) AP_PAGE=1;
-  var page=sorted.slice((AP_PAGE-1)*ITEMS_PER_PAGE, AP_PAGE*ITEMS_PER_PAGE);
-
-  var body=$('apBody');
-  body.innerHTML=page.map(function(p){ return partnerRow(p,true); }).join('');
-
-  renderPagination('apPagination', AP_PAGE, totalPages, function(pg){ AP_PAGE=pg; renderAllPartners(); });
-  attachViewButtons(body);
-}
-
-function partnerRow(p, showOwner){
-  var mom=0;
-  if(p.lmtd>0) mom=Math.round((p.mtd-p.lmtd)*100/p.lmtd);
-  else if(p.mtd>0) mom=100;
-  var momClass=pctClass(mom);
-
-  return '<tr>'+
-    '<td class="name-cell"><div class="p-name">'+safe(p.name)+'</div><div class="p-gid">'+safe(p.gid)+'</div></td>'+
-    '<td style="color:var(--text2)">'+safe(p.city)+'<br><span style="font-size:11px;color:var(--text3)">'+safe(p.state)+'</span></td>'+
-    (showOwner?'<td style="color:var(--text2)">'+safe(p.oName)+'<br><span style="font-size:11px;color:var(--text3)">'+safe(p.oRole)+'</span></td>':'')+
-    '<td class="val-dim">'+fmt(p.maxPot)+'</td>'+
-    '<td class="val-amber">'+fmt(p.oPot)+'</td>'+
-    '<td class="val-dim">'+fmt(p.target)+'</td>'+
-    '<td class="'+(p.mtd>p.lmtd?'val-green':p.mtd<p.lmtd?'val-red':'val-amber')+'">'+fmt(p.mtd)+'</td>'+
-    '<td class="val-dim">'+fmt(p.lmtd)+'</td>'+
-    '<td class="'+momClass+'">'+(mom>=0?'+':'')+mom+'%</td>'+
-    '<td>'+growthPill(p.growth)+'</td>'+
-    '<td>'+statusPill(p.active)+'</td>'+
-    '<td>'+connPill(p)+'</td>'+
-    '<td class="val-green">'+fmtN(p.calls)+'</td>'+
-    '<td class="val-dim">'+fmtN(p.visits)+'</td>'+
-    '<td><button class="btn-view" data-gid="'+safe(p.gid)+'" data-name="'+safe(p.name)+'">View</button></td>'+
-    '</tr>';
-}
-
-function myPartnerRow(p){
-  var mom=0;
-  if(p.lmtd>0) mom=Math.round((p.mtd-p.lmtd)*100/p.lmtd);
-  else if(p.mtd>0) mom=100;
-
-  return '<tr>'+
-    '<td class="name-cell"><div class="p-name">'+safe(p.name)+'</div><div class="p-gid">'+safe(p.gid)+'</div></td>'+
-    '<td style="color:var(--text2)">'+safe(p.city)+'<br><span style="font-size:11px;color:var(--text3)">'+safe(p.state)+'</span></td>'+
-    '<td class="val-dim">'+fmt(p.maxPot)+'</td>'+
-    '<td class="val-amber">'+fmt(p.oPot)+'</td>'+
-    '<td class="val-dim">'+fmt(p.target)+'</td>'+
-    '<td class="'+(p.mtd>p.lmtd?'val-green':p.mtd<p.lmtd?'val-red':'val-amber')+'">'+fmt(p.mtd)+'</td>'+
-    '<td class="val-dim">'+fmt(p.lmtd)+'</td>'+
-    '<td>'+growthPill(p.growth)+'</td>'+
-    '<td>'+statusPill(p.active)+'</td>'+
-    '<td class="val-green">'+fmtN(p.calls)+'</td>'+
-    '<td class="val-dim">'+fmtN(p.visits)+'</td>'+
-    '<td><button class="btn-view" data-gid="'+safe(p.gid)+'" data-name="'+safe(p.name)+'">View</button></td>'+
-    '</tr>';
-}
-
-function renderMyPartners(){
-  var search=($('mpSearch')&&$('mpSearch').value||'').toLowerCase();
-  var status=$('mpStatus')&&$('mpStatus').value||'';
-  var trend =$('mpTrend')&&$('mpTrend').value||'';
-
-  var filtered=MY_PARTNERS.filter(function(p){
-    if(search&&!(p.name||'').toLowerCase().includes(search)&&!(p.gid||'').toLowerCase().includes(search)) return false;
-    if(status){
-      var a=String(p.active||'').toLowerCase();
-      var isAct=(a==='active');
-      if(status==='active'&&!isAct) return false;
-      if(status==='inactive'&&isAct) return false;
-    }
-    if(trend){
-      var g=String(p.growth||'').toLowerCase();
-      var gn2=parseFloat(String(p.growth||'').replace(/%/g,'').trim())||0;
-      if(trend==='growth'&&gn2<=0) return false;
-      if(trend==='degrowth'&&gn2>=0) return false;
-    }
-    return true;
-  });
-
-  var totalPages=Math.max(1,Math.ceil(filtered.length/ITEMS_PER_PAGE));
-  if(MP_PAGE>totalPages) MP_PAGE=1;
-  var page=filtered.slice((MP_PAGE-1)*ITEMS_PER_PAGE,MP_PAGE*ITEMS_PER_PAGE);
-
-  var body=$('mpBody');
-  body.innerHTML=page.map(function(p){ return myPartnerRow(p); }).join('');
-  renderPagination('mpPagination',MP_PAGE,totalPages,function(pg){ MP_PAGE=pg; renderMyPartners(); });
-  attachViewButtons(body);
-}
-
-// ── Pagination ───────────────────────────────────────────────
-function renderPagination(containerId,current,total,onPage){
-  var el=$(containerId);
-  if(!el||total<=1){ if(el) el.innerHTML=''; return; }
-
-  var html='<div style="color:var(--text2)">Page '+current+' of '+total+'</div><div class="pg-btns">';
-  html+='<button class="pg-btn" '+(current===1?'disabled':'')+' data-pg="'+(current-1)+'">‹ Prev</button>';
-
-  // Show at most 5 page buttons
-  var start=Math.max(1,current-2), end=Math.min(total,current+2);
-  for(var i=start;i<=end;i++){
-    html+='<button class="pg-btn'+(i===current?' active':'')+'" data-pg="'+i+'">'+i+'</button>';
-  }
-  html+='<button class="pg-btn" '+(current===total?'disabled':'')+' data-pg="'+(current+1)+'">Next ›</button>';
+// ── Overview ──────────────────────────────────────────────────────────
+function renderOverview(data){
+  var s = data.summary;
+  var role=(peUser.role||'').toUpperCase();
+  var html='<div class="kpi-grid">';
+  html+='<div class="kpi-card"><div class="kpi-label">Total Partners</div><div class="kpi-value">'+s.total+'</div></div>';
+  html+='<div class="kpi-card"><div class="kpi-label">Active</div><div class="kpi-value green">'+s.active+'</div></div>';
+  html+='<div class="kpi-card"><div class="kpi-label">Inactive</div><div class="kpi-value red">'+s.inactive+'</div></div>';
+  html+='<div class="kpi-card"><div class="kpi-label">MTD</div><div class="kpi-value">'+fmtINR(s.mtd)+'</div></div>';
+  html+='<div class="kpi-card"><div class="kpi-label">LMTD</div><div class="kpi-value">'+fmtINR(s.lmtd)+'</div></div>';
+  html+='<div class="kpi-card"><div class="kpi-label">Target</div><div class="kpi-value">'+fmtINR(s.target)+'</div></div>';
+  html+='<div class="kpi-card"><div class="kpi-label">Achievement</div><div class="kpi-value '+achColor(s.targetAch)+'">'+s.targetAchFmt+'</div></div>';
+  html+='<div class="kpi-card"><div class="kpi-label">MoM Growth</div><div class="kpi-value '+(s.mom>=0?'green':'red')+'">'+s.momFmt+'</div></div>';
   html+='</div>';
-  el.innerHTML=html;
+  $('overviewContent').innerHTML=html;
+}
 
-  el.querySelectorAll('.pg-btn:not(:disabled)').forEach(function(btn){
-    btn.addEventListener('click',function(){ onPage(parseInt(this.dataset.pg)); });
+// ── All Partners ──────────────────────────────────────────────────────
+function buildAllPartnersFilters(partners){
+  populateSelect('apZone',  uniq(partners.map(function(p){return p.zone;})));
+  populateSelect('apState', uniq(partners.map(function(p){return p.state;})));
+  populateSelect('apOwner', uniq(partners.map(function(p){return p.oName;})));
+}
+
+function apFilter(){
+  if(!DASH) return;
+  var q=($('apSearch').value||'').toLowerCase();
+  var zone=$('apZone').value, state=$('apState').value;
+  var status=$('apStatus').value, owner=$('apOwner').value;
+  AP_FILTERED=DASH.partners.filter(function(p){
+    if(q&&!((p.name+p.gid+p.city+p.oName).toLowerCase().includes(q))) return false;
+    if(zone&&p.zone!==zone) return false;
+    if(state&&p.state!==state) return false;
+    if(status&&!(p.active||'').toLowerCase().includes(status.toLowerCase())) return false;
+    if(owner&&p.oName!==owner) return false;
+    return true;
+  });
+  AP_PAGE=1;
+  renderAPTable();
+}
+
+function apClear(){
+  $('apSearch').value='';$('apZone').value='';
+  $('apState').value='';$('apStatus').value='';$('apOwner').value='';
+  apFilter();
+}
+
+function renderAPTable(){
+  var total=AP_FILTERED.length;
+  var start=(AP_PAGE-1)*PAGE_SIZE, end=Math.min(start+PAGE_SIZE,total);
+  var slice=AP_FILTERED.slice(start,end);
+  $('apTbody').innerHTML=slice.map(function(p){return partnerRow(p,true);}).join('');
+  renderPagination('apPagination',AP_PAGE,Math.ceil(total/PAGE_SIZE),function(pg){
+    AP_PAGE=pg;renderAPTable();
   });
 }
 
-// ── AM Performance ───────────────────────────────────────────
-function renderAMPerf(){
-  var search=($('amSearch')&&$('amSearch').value||'').toLowerCase();
-  var sortVal=$('amSort')?$('amSort').value:'mtd_desc';
-  var filterAM=$('amFilter')?$('amFilter').value:'';
-
-  // Group by AM/RM owners
-  var owners={};
-  ALL_PARTNERS.forEach(function(p){
-    var role=(p.oRole||'').toUpperCase().replace(':','').trim();
-    if(role!=='AM'&&role!=='RM') return;
-    if(!owners[p.oName]) owners[p.oName]={name:p.oName,role:p.oRole,emp:p.oEmp,partners:[]};
-    owners[p.oName].partners.push(p);
+// ── My Partners ───────────────────────────────────────────────────────
+function buildMyPartnersFilters(partners){
+  var role=(peUser.role||'').toUpperCase();
+  var mine=partners.filter(function(p){
+    if(role==='AM') return (p.oName||'').toLowerCase()===(peUser.name||'').toLowerCase()||
+                           (p.empId||'').toLowerCase()===(peUser.gid||'').toLowerCase();
+    return true;
   });
+  MP_FILTERED=mine;
+  populateSelect('mpState',uniq(mine.map(function(p){return p.state;})));
+  renderMPTable();
+}
 
-  var list=Object.values(owners).map(function(o){
-    var s=summarizeList(o.partners);
-    return {name:o.name,role:o.role,emp:o.emp,count:o.partners.length,summary:s,partners:o.partners};
+function mpFilter(){
+  if(!DASH) return;
+  var q=($('mpSearch').value||'').toLowerCase();
+  var state=$('mpState').value, status=$('mpStatus').value;
+  var role=(peUser.role||'').toUpperCase();
+  var base=DASH.partners.filter(function(p){
+    if(role==='AM') return (p.oName||'').toLowerCase()===(peUser.name||'').toLowerCase()||
+                           (p.empId||'').toLowerCase()===(peUser.gid||'').toLowerCase();
+    return true;
   });
-
-  // Filter
-  if(search) list=list.filter(function(o){ return o.name.toLowerCase().indexOf(search)>=0; });
-  if(filterAM) list=list.filter(function(o){ return o.name===filterAM; });
-
-  // Sort
-  list.sort(function(a,b){
-    if(sortVal==='mtd_asc') return a.summary.mtd-b.summary.mtd;
-    if(sortVal==='name_asc') return a.name.localeCompare(b.name);
-    if(sortVal==='count_desc') return b.count-a.count;
-    return b.summary.mtd-a.summary.mtd; // mtd_desc
+  MP_FILTERED=base.filter(function(p){
+    if(q&&!((p.name+p.gid+p.city).toLowerCase().includes(q))) return false;
+    if(state&&p.state!==state) return false;
+    if(status&&!(p.active||'').toLowerCase().includes(status.toLowerCase())) return false;
+    return true;
   });
+  MP_PAGE=1;renderMPTable();
+}
 
-  var grid=$('amGrid');
-  if(list.length===0){
-    grid.innerHTML='';
-    $('amEmpty').style.display='block';
+function mpClear(){$('mpSearch').value='';$('mpState').value='';$('mpStatus').value='';mpFilter();}
+
+function renderMPTable(){
+  var total=MP_FILTERED.length;
+  var start=(MP_PAGE-1)*PAGE_SIZE, end=Math.min(start+PAGE_SIZE,total);
+  var slice=MP_FILTERED.slice(start,end);
+  $('mpTbody').innerHTML=slice.map(function(p){return partnerRow(p,false);}).join('');
+  renderPagination('mpPagination',MP_PAGE,Math.ceil(total/PAGE_SIZE),function(pg){
+    MP_PAGE=pg;renderMPTable();
+  });
+}
+
+// ── Team Performance ──────────────────────────────────────────────────
+function buildTeamFilters(team){
+  TP_ALL=team;
+  populateSelect('tpZone',  uniq(team.map(function(t){return t.zone;})));
+  populateSelect('tpState', uniq(team.map(function(t){return t.state;})));
+  tpFilter();
+}
+
+function tpFilter(){
+  var q=($('tpSearch').value||'').toLowerCase();
+  var zone=$('tpZone').value, state=$('tpState').value, role=$('tpRole').value;
+  var filtered=TP_ALL.filter(function(t){
+    if(q&&!t.name.toLowerCase().includes(q)) return false;
+    if(zone&&t.zone!==zone) return false;
+    if(state&&t.state!==state) return false;
+    if(role&&(t.role||'').toUpperCase()!==role) return false;
+    return true;
+  });
+  renderTeamGrid(filtered);
+}
+
+function tpClear(){
+  $('tpSearch').value='';$('tpZone').value='';$('tpState').value='';$('tpRole').value='';
+  tpFilter();
+}
+
+function renderTeamGrid(team){
+  if(!team.length){
+    $('tpGrid').innerHTML='<div class="empty-state"><div class="es-icon">🔍</div><div class="es-msg">No team members found</div></div>';
     return;
   }
-  $('amEmpty').style.display='none';
-  grid.innerHTML=list.map(function(o){ return teamCardHTML(o); }).join('');
-
-  grid.querySelectorAll('.team-card').forEach(function(card,i){
-    card.addEventListener('click',function(){
-      openTeamModal(list[i]);
-    });
-  });
-}
-
-// ── Team Performance ─────────────────────────────────────────
-function renderTeamPerf(){
-  var team=DATA.team||[];
-  $('teamPerfCount').textContent=team.length+' MEMBERS';
-
-  if(team.length===0){
-    $('teamGrid').innerHTML='<div class="empty-state"><div class="es-icon">👥</div><p>No team data.</p></div>';
-    return;
-  }
-
-  $('teamGrid').innerHTML=team.map(function(o){ return teamCardHTML(o); }).join('');
-
-  var cards=$('teamGrid').querySelectorAll('.team-card');
-  cards.forEach(function(card,i){
-    card.addEventListener('click',function(){
-      openTeamModal(team[i]);
-    });
-  });
-}
-
-function teamCardHTML(o){
-  var s=o.summary||{};
-  var ach=s.target>0?Math.round(s.mtd*100/s.target):0;
-  var mom=s.mom||0;
-  return '<div class="team-card">'+
-    '<div class="tc-header">'+
-      '<div>'+
-        '<div class="tc-name">'+safe(o.name)+'</div>'+
-        '<div style="font-size:11px;color:var(--text2);margin-top:3px;">'+fmtN(o.count||0)+' partners</div>'+
-      '</div>'+
-      '<div class="tc-role">'+safe(o.role)+'</div>'+
-    '</div>'+
-    '<div class="tc-metrics">'+
-      '<div><div class="tc-m-label">MTD</div><div class="tc-m-value amber">'+fmt(s.mtd||0)+'</div></div>'+
-      '<div><div class="tc-m-label">LMTD</div><div class="tc-m-value dim">'+fmt(s.lmtd||0)+'</div></div>'+
-      '<div><div class="tc-m-label">Target</div><div class="tc-m-value dim">'+fmt(s.target||0)+'</div></div>'+
-      '<div><div class="tc-m-label">Calls</div><div class="tc-m-value green">'+fmtN(s.calls||0)+'</div></div>'+
-      '<div><div class="tc-m-label">Visits</div><div class="tc-m-value red">'+fmtN(s.visits||0)+'</div></div>'+
-      '<div><div class="tc-m-label">Ach%</div><div class="tc-m-value '+(ach>=80?'green':ach>=50?'amber':'red')+'">'+ach+'%</div></div>'+
-    '</div>'+
-    '<div class="tc-bar"><div class="tc-bar-fill" style="width:'+Math.min(ach,100)+'%"></div></div>'+
-    '<div class="tc-footer">'+
-      '<span>MoM: <strong class="'+(mom>=0?'up':'down')+'">'+(mom>=0?'+':'')+mom+'%</strong></span>'+
-      '<span>Connected: '+fmtN(s.connected||0)+'/'+fmtN(o.count||0)+'</span>'+
-    '</div>'+
-  '</div>';
-}
-
-// ── Team Drill Modal ─────────────────────────────────────────
-function openTeamModal(owner){
-  $('tmModalName').textContent=owner.name||'—';
-  $('tmModalSub').textContent=(owner.role||'')+(owner.count?' · '+owner.count+' partners':'');
-
-  var partners=owner.partners||[];
-  var s=owner.summary||{};
-
-  var kpis='<div class="modal-kpi-row">'+
-    '<div class="modal-kpi"><div class="mk-label">MTD</div><div class="mk-value amber">'+fmt(s.mtd||0)+'</div></div>'+
-    '<div class="modal-kpi"><div class="mk-label">LMTD</div><div class="mk-value">'+fmt(s.lmtd||0)+'</div></div>'+
-    '<div class="modal-kpi"><div class="mk-label">Target</div><div class="mk-value">'+fmt(s.target||0)+'</div></div>'+
-    '<div class="modal-kpi"><div class="mk-label">Calls / Visits</div><div class="mk-value green">'+fmtN(s.calls||0)+' / '+fmtN(s.visits||0)+'</div></div>'+
-    '<div class="modal-kpi"><div class="mk-label">Connected</div><div class="mk-value">'+fmtN(s.connected||0)+' / '+fmtN(owner.count||0)+'</div></div>'+
-    '<div class="modal-kpi"><div class="mk-label">Growth / Degrowth</div><div class="mk-value green">'+fmtN(s.growth||0)+'</div></div>'+
-    '</div>';
-
-  var tableHTML='<div class="table-wrap" style="max-height:400px;overflow-y:auto;">'+
-    '<table class="tbl"><thead><tr>'+
-    '<th>Partner</th><th>City/State</th><th>MTD</th><th>LMTD</th><th>Target</th>'+
-    '<th>Growth</th><th>Status</th><th>Calls</th><th>Visits</th><th>Action</th>'+
-    '</tr></thead><tbody id="tmPartnerBody">'+
-    partners.map(function(p){
-      return '<tr>'+
-        '<td class="name-cell"><div class="p-name">'+safe(p.name)+'</div><div class="p-gid">'+safe(p.gid)+'</div></td>'+
-        '<td style="color:var(--text2)">'+safe(p.city)+'<br><span style="font-size:11px;color:var(--text3)">'+safe(p.state)+'</span></td>'+
-        '<td class="val-amber">'+fmt(p.mtd)+'</td>'+
-        '<td class="val-dim">'+fmt(p.lmtd)+'</td>'+
-        '<td class="val-dim">'+fmt(p.target)+'</td>'+
-        '<td>'+growthPill(p.growth)+'</td>'+
-        '<td>'+statusPill(p.active)+'</td>'+
-        '<td class="val-green">'+fmtN(p.calls)+'</td>'+
-        '<td class="val-dim">'+fmtN(p.visits)+'</td>'+
-        '<td><button class="btn-view" data-gid="'+safe(p.gid)+'" data-name="'+safe(p.name)+'">View</button></td>'+
-        '</tr>';
-    }).join('')+
-    '</tbody></table></div>';
-
-  $('tmModalBody').innerHTML=kpis+tableHTML;
-  attachViewButtons($('tmModalBody'));
-  $('teamModal').classList.add('open');
-}
-
-$('tmModalClose')&&$('tmModalClose').addEventListener('click',function(){
-  $('teamModal').classList.remove('open');
-});
-$('teamModal')&&$('teamModal').addEventListener('click',function(e){
-  if(e.target===$('teamModal')) $('teamModal').classList.remove('open');
-});
-
-// ── VIEW MODAL (Partner Detail) ──────────────────────────────
-function attachViewButtons(container){
-  container.querySelectorAll('.btn-view').forEach(function(btn){
-    btn.addEventListener('click',function(e){
-      e.stopPropagation();
-      openPartnerModal(this.dataset.gid, this.dataset.name);
-    });
-  });
-}
-
-function openPartnerModal(gid, name){
-  $('modalName').textContent=name||gid;
-  $('modalGID').textContent=gid;
-  $('modalBody').innerHTML='<div class="spinner" style="margin:40px auto;width:36px;height:36px;"></div>';
-  $('partnerModal').classList.add('open');
-
-  // First try local data
-  var local=null;
-  ALL_PARTNERS.forEach(function(p){ if(p.gid===gid) local=p; });
-
-  if(local){
-    buildPartnerModal(local);
-  } else {
-    callApi('getPartner',{gid:gid},function(err,res){
-      if(err||!res||!res.success){
-        $('modalBody').innerHTML='<div class="empty-state"><p>Partner data not found.</p></div>';
-        return;
-      }
-      buildPartnerModal(res.partner);
-    });
-  }
-}
-
-function buildPartnerModal(p){
-  var mom=0;
-  if(p.lmtd>0) mom=Math.round((p.mtd-p.lmtd)*100/p.lmtd);
-  else if(p.mtd>0) mom=100;
-
-  var months=p.months||{};
-  var monthVals=MONTH_KEYS.map(function(k){ return months[k]||0; });
-  var maxVal=Math.max.apply(null,monthVals)||1;
-
-  // KPI row
-  var kpis='<div class="modal-kpi-row">'+
-    '<div class="modal-kpi"><div class="mk-label">MTD (May)</div><div class="mk-value '+(p.mtd>0?'green':'')+'">'+fmt(p.mtd)+'</div></div>'+
-    '<div class="modal-kpi"><div class="mk-label">LMTD (Apr)</div><div class="mk-value">'+fmt(p.lmtd)+'</div></div>'+
-    '<div class="modal-kpi"><div class="mk-label">MoM</div><div class="mk-value '+(mom>=0?'green':'red')+'">'+(mom>=0?'+':'')+mom+'%</div></div>'+
-    '<div class="modal-kpi"><div class="mk-label">Target</div><div class="mk-value">'+fmt(p.target)+'</div></div>'+
-    '<div class="modal-kpi"><div class="mk-label">Max Potential</div><div class="mk-value amber">'+fmt(p.maxPot)+'</div></div>'+
-    '<div class="modal-kpi"><div class="mk-label">Overall Pot.</div><div class="mk-value amber">'+fmt(p.oPot)+'</div></div>'+
-    '<div class="modal-kpi"><div class="mk-label">Net Combined</div><div class="mk-value">'+fmt(p.net)+'</div></div>'+
-    '<div class="modal-kpi"><div class="mk-label">FTD (Today)</div><div class="mk-value" style="color:#ffab00;font-weight:700">'+fmt(p.ftd)+'</div></div>'+
-    '</div>';
-
-  // 14-month bar chart
-  var barHTML='<div class="modal-chart-wrap">'+
-    '<div class="modal-chart-title">14-Month Business Trend</div>'+
-    '<div class="bar-chart">';
-
-  monthVals.forEach(function(v,i){
-    var h=Math.max(2,Math.round((v/maxVal)*110));
-    barHTML+='<div class="bar-col">'+
-      '<div class="b-val">'+fmtShort(v)+'</div>'+
-      '<div class="b-bar" style="height:'+h+'px"></div>'+
-      '<div class="b-label">'+MONTHS[i]+'</div>'+
-      '</div>';
-  });
-  barHTML+='</div></div>';
-
-  // Info grid
-  var info='<div class="modal-info-grid">'+
-    '<div class="modal-info-item"><div class="mi-label">Owner</div><div class="mi-value">'+safe(p.oName)+' ('+safe(p.oRole)+')</div></div>'+
-    '<div class="modal-info-item"><div class="mi-label">Zone / State</div><div class="mi-value">'+safe(p.zone)+' · '+safe(p.state)+'</div></div>'+
-    '<div class="modal-info-item"><div class="mi-label">City</div><div class="mi-value">'+safe(p.city)+'</div></div>'+
-    '<div class="modal-info-item"><div class="mi-label">Months Active</div><div class="mi-value">'+safe(p.mAct)+' months</div></div>'+
-    '<div class="modal-info-item"><div class="mi-label">Calls / Visits</div><div class="mi-value">'+fmtN(p.calls)+' / '+fmtN(p.visits)+'</div></div>'+
-    '<div class="modal-info-item"><div class="mi-label">Status</div><div class="mi-value">'+statusPill(p.active)+'</div></div>'+
-    '<div class="modal-info-item"><div class="mi-label">Growth Trend</div><div class="mi-value">'+growthPill(p.growth)+'</div></div>'+
-    '<div class="modal-info-item"><div class="mi-label">FTD</div><div class="mi-value">'+fmt(p.ftd)+'</div></div>'+
-    '</div>';
-
-  // Remarks
-  var rmk='';
-  if(p.rmkS||p.rmkP){
-    rmk='<div class="modal-remark">'+
-      '<div class="mr-title">📝 Remarks</div>'+
-      (p.rmkS?'<div class="mr-text" style="margin-bottom:6px;"><strong>Sheet:</strong> '+safe(p.rmkS)+'</div>':'')+
-      (p.rmkP?'<div class="mr-text"><strong>Partner:</strong> '+safe(p.rmkP)+'</div>':'')+
-      '</div>';
-  }
-
-  $('modalBody').innerHTML=kpis+barHTML+info+rmk;
-}
-
-function fmtShort(v){
-  if(!v||v===0) return '0';
-  if(v>=10000000) return (v/10000000).toFixed(1)+'Cr';
-  if(v>=100000)   return (v/100000).toFixed(1)+'L';
-  if(v>=1000)     return (v/1000).toFixed(0)+'K';
-  return String(Math.round(v));
-}
-
-$('modalClose')&&$('modalClose').addEventListener('click',function(){
-  $('partnerModal').classList.remove('open');
-});
-$('partnerModal')&&$('partnerModal').addEventListener('click',function(e){
-  if(e.target===$('partnerModal')) $('partnerModal').classList.remove('open');
-});
-
-// ── Tele-RM Tab ──────────────────────────────────────────────
-function renderTeleRM(){
-  // Check if user is Tele-RM ZH (Ayush Gupta) — they get a full dashboard
-  // For others, this tab is hidden
-  var telePart = DATA.tele ? (DATA.tele.partners||[]) : [];
-  var teleSum  = DATA.tele ? (DATA.tele.summary||{}) : (DATA.summary||{});
-  var teleTeam = DATA.tele ? (DATA.tele.team||[]) : (DATA.team||[]);
-
-  if(DATA.summary&&!DATA.tele){
-    // This is Tele-RM ZH's own data
-    telePart = DATA.partners||[];
-    teleSum  = DATA.summary||{};
-    teleTeam = DATA.team||[];
-  }
-
-  var ov=$('teleOverview');
-  ov.innerHTML=
-    '<div class="metric-card" style="border-left:3px solid var(--id-red);">'+
-      '<div class="mc-label">Total Tele-RM Partners</div>'+
-      '<div class="mc-value">'+fmtN(teleSum.total||0)+'</div>'+
-      '<div class="mc-sub"><span class="badge badge-green">Active: '+fmtN(teleSum.active||0)+'</span> <span class="badge badge-red">Inactive: '+fmtN(teleSum.inactive||0)+'</span></div>'+
-    '</div>'+
-    '<div class="metric-card" style="border-left:3px solid var(--green);">'+
-      '<div class="mc-label">MTD Business</div>'+
-      '<div class="mc-value rupee">'+fmt(teleSum.mtd||0).replace('₹','')+'</div>'+
-    '</div>'+
-    '<div class="metric-card" style="border-left:3px solid var(--amber);">'+
-      '<div class="mc-label">Calls / Visits</div>'+
-      '<div class="mc-value">'+fmtN(teleSum.calls||0)+' / '+fmtN(teleSum.visits||0)+'</div>'+
-    '</div>';
-
-  var grid=$('teleTeamGrid');
-  if(teleTeam.length===0){
-    grid.innerHTML='<div class="empty-state"><div class="es-icon">📞</div><p>No Tele-RM team data.</p></div>';
-    return;
-  }
-  grid.innerHTML=teleTeam.map(function(o){ return teamCardHTML(o); }).join('');
-  grid.querySelectorAll('.team-card').forEach(function(card,i){
-    card.addEventListener('click',function(){ openTeamModal(teleTeam[i]); });
-  });
-}
-
-// ── Daily Run Rate ────────────────────────────────────────────
-function renderDailyRR(){
-  var team=DATA.team||[];
-  var dayOfMonth=new Date().getDate();
-  var daysInMonth=new Date(2026,4,0).getDate(); // May 2026
-
-  if(team.length===0){
-    $('drrGrid').innerHTML='<div class="empty-state"><div class="es-icon">📊</div><p>No run rate data.</p></div>';
-    return;
-  }
-
-  $('drrGrid').innerHTML=team.map(function(o){
-    var s=o.summary||{};
-    var target=s.target||0;
-    var mtd=s.mtd||0;
-    var runRate=dayOfMonth>0?Math.round(mtd/dayOfMonth):0;
-    var projected=runRate*daysInMonth;
-    var ach=target>0?Math.round(mtd*100/target):0;
-    var barColor=ach>=80?'var(--green)':ach>=50?'var(--amber)':'var(--red)';
-
-    return '<div class="drr-card">'+
-      '<div class="dc-owner">'+safe(o.name)+'</div>'+
-      '<div class="dc-sub">('+safe(o.role)+') · '+fmtN(o.count||0)+' partners</div>'+
-      '<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:4px;">'+
-        '<span>MTD</span><strong style="color:var(--amber)">'+fmt(mtd)+'</strong>'+
-      '</div>'+
-      '<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:4px;">'+
-        '<span>Target</span><strong>'+fmt(target)+'</strong>'+
-      '</div>'+
-      '<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:4px;">'+
-        '<span>Daily Rate</span><strong>'+fmt(runRate)+'/day</strong>'+
-      '</div>'+
-      '<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:8px;">'+
-        '<span>Projected</span><strong class="'+(projected>=target?'up':'down')+'">'+fmt(projected)+'</strong>'+
-      '</div>'+
-      '<div class="drr-bar-wrap">'+
-        '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2);margin-bottom:4px;">'+
-          '<span>Ach: '+ach+'%</span><span>Day '+dayOfMonth+'/'+daysInMonth+'</span>'+
+  $('tpGrid').innerHTML=team.map(function(t){
+    var av=(t.name||'?').charAt(0).toUpperCase();
+    var ach=t.targetAch||0;
+    var barW=Math.min(100,ach);
+    var barColor=ach>=100?'#4ade80':ach>=50?'#fbbf24':'#f87171';
+    return '<div class="team-card">'+
+      '<div class="tc-header">'+
+        '<div class="tc-avatar">'+av+'</div>'+
+        '<div>'+
+          '<div class="tc-name">'+esc(t.name)+'</div>'+
+          '<div class="tc-meta">'+esc(t.zone)+(t.state?' · '+esc(t.state):'')+'</div>'+
         '</div>'+
-        '<div class="drr-bar-bg"><div class="drr-bar-fill" style="width:'+Math.min(ach,100)+'%;background:'+barColor+'"></div></div>'+
+        '<div class="tc-role-badge">'+esc(t.role)+'</div>'+
       '</div>'+
+      '<div class="tc-stats">'+
+        '<div class="tc-stat"><div class="tc-stat-label">MTD</div><div class="tc-stat-val">'+fmtINR(t.mtd)+'</div></div>'+
+        '<div class="tc-stat"><div class="tc-stat-label">Partners</div><div class="tc-stat-val">'+t.count+'</div></div>'+
+        '<div class="tc-stat"><div class="tc-stat-label">Active</div><div class="tc-stat-val" style="color:#4ade80">'+t.active+'</div></div>'+
+      '</div>'+
+      '<div class="tc-progress"><div class="tc-progress-bar" style="width:'+barW+'%;background:'+barColor+'"></div></div>'+
+      '<div class="tc-progress-label">Target: '+fmtINR(t.target)+' · Ach: '+t.targetAchFmt+'</div>'+
+      '<button class="btn-tc-details" onclick="openDrillByOwner(\''+esc(t.name)+'\')">📋 View Partners</button>'+
     '</div>';
   }).join('');
 }
 
-// ── CSV Export ───────────────────────────────────────────────
-function exportCSV(){
-  var filtered=applyFilters(ALL_PARTNERS);
-  var headers=['GID','Name','City','State','Zone','Owner','Role','Max Pot','Overall Pot','Target','MTD','LMTD','MoM%','Growth','Status','Calls','Visits'];
-  var rows=[headers.join(',')];
-  filtered.forEach(function(p){
-    var mom=p.lmtd>0?Math.round((p.mtd-p.lmtd)*100/p.lmtd):(p.mtd>0?100:0);
-    rows.push([
-      p.gid,p.name,p.city,p.state,p.zone,p.oName,p.oRole,
-      p.maxPot,p.oPot,p.target,p.mtd,p.lmtd,mom+'%',
-      p.growth,p.active,p.calls,p.visits
-    ].map(function(v){ return '"'+String(v||'').replace(/"/g,'""')+'"'; }).join(','));
+// ── Drill: Team member → their partners ───────────────────────────────
+function openDrillByOwner(ownerName){
+  if(!DASH) return;
+  var pts=DASH.partners.filter(function(p){
+    return (p.oName||'').toLowerCase()===ownerName.toLowerCase();
+  });
+  $('drillTitle').textContent=ownerName;
+  $('drillMeta').textContent=pts.length+' partner(s)';
+  $('drillBody').innerHTML='<div class="table-wrap"><table class="ptable">'+
+    '<thead><tr><th>View</th><th>GID</th><th>Partner</th><th>City</th><th>State</th>'+
+    '<th>MTD</th><th>LMTD</th><th>Ach%</th><th>Status</th></tr></thead>'+
+    '<tbody>'+pts.map(function(p){
+      return '<tr>'+
+        '<td><button class="btn-view" onclick="openViewModal(\''+esc(p.gid)+'\')">View</button></td>'+
+        '<td>'+esc(p.gid)+'</td>'+
+        '<td class="name-cell">'+esc(p.name)+'</td>'+
+        '<td>'+esc(p.city)+'</td><td>'+esc(p.state)+'</td>'+
+        '<td class="val-green">'+fmtINR(p.mtd)+'</td>'+
+        '<td>'+fmtINR(p.lmtd)+'</td>'+
+        '<td class="'+achColor(p.targetAch)+'">'+p.targetAchFmt+'</td>'+
+        '<td>'+(p.active&&p.active.toLowerCase().includes('active')?'<span class="badge-active">Active</span>':'<span class="badge-inactive">Inactive</span>')+'</td>'+
+      '</tr>';
+    }).join('')+
+    '</tbody></table></div>';
+  $('drillModal').classList.remove('hidden');
+}
+
+function closeDrillModal(){$('drillModal').classList.add('hidden');}
+
+// ── VIEW MODAL ────────────────────────────────────────────────────────
+window.openViewModal = function(gid){
+  var local = null;
+  if(DASH&&DASH.partners){
+    local=DASH.partners.find(function(p){return p.gid===gid;})||null;
+  }
+  if(local){
+    buildViewModal(local);
+  } else {
+    status('Loading partner…','loading');
+    callApi('getPartner',{gid:gid,user:peUser},function(err,res){
+      hideStatus();
+      if(err||!res||!res.success){
+        alert('Could not load partner data.');return;
+      }
+      buildViewModal(res.partner);
+    });
+  }
+};
+
+function buildViewModal(p){
+  var months=MONTH_LABELS;
+  var vals=p.monthlyData||[];
+  var bestMonth=p.bestMonth||Math.max.apply(null,vals.concat([0]));
+  var targetAch=p.targetAch||0;
+  var achFmt=p.targetAchFmt||(targetAch+'%');
+  var achCls=targetAch>=100?'green':targetAch>=50?'amber':'red';
+
+  $('vmName').textContent=p.name||'—';
+  $('vmMeta').textContent='GID: '+p.gid+' · '+p.city+', '+p.state+' · '+p.zone+' · AM: '+p.oName;
+
+  $('vmBody').innerHTML=
+    // KPI row (4 tiles)
+    '<div class="vm-kpi-row">'+
+      '<div class="vm-kpi"><div class="vm-kpi-label">Overall Potential</div><div class="vm-kpi-val">'+fmtINR(p.oPot)+'</div></div>'+
+      '<div class="vm-kpi"><div class="vm-kpi-label">May Target</div><div class="vm-kpi-val">'+(p.target>0?fmtINR(p.target):'—')+'</div></div>'+
+      '<div class="vm-kpi"><div class="vm-kpi-label">MTD (May\'26)</div><div class="vm-kpi-val green">'+fmtINR(p.mtd)+'</div></div>'+
+      '<div class="vm-kpi"><div class="vm-kpi-label">Best Month</div><div class="vm-kpi-val">'+fmtINR(bestMonth)+'</div></div>'+
+    '</div>'+
+    // Highlight box (yellow border)
+    '<div class="vm-highlight">'+
+      '<div class="vm-hl-item"><div class="vm-hl-label">MAX POTENTIAL</div><div class="vm-hl-val">'+fmtINR(p.maxPot)+'</div></div>'+
+      '<div class="vm-hl-item"><div class="vm-hl-label">MAY TARGET</div><div class="vm-hl-val">'+(p.target>0?fmtINR(p.target):'Not set')+'</div></div>'+
+      '<div class="vm-hl-item"><div class="vm-hl-label">MTD VS LMTD</div><div class="vm-hl-val">'+fmtINR(p.mtd)+' / '+fmtINR(p.lmtd)+'</div></div>'+
+      '<div class="vm-hl-item"><div class="vm-hl-label">TARGET ACHIEVEMENT</div><div class="vm-hl-val '+achCls+'">'+achFmt+'</div></div>'+
+    '</div>'+
+    // Trend chart
+    '<div class="vm-trend-title">14-MONTH TREND</div>'+
+    '<div class="vm-chart-wrap"><canvas id="vmCanvas" class="vm-chart-canvas"></canvas></div>';
+
+  $('viewModal').classList.remove('hidden');
+
+  // Render Chart.js line chart
+  setTimeout(function(){
+    var canvas=$('vmCanvas');
+    if(!canvas) return;
+    if(vmChart){vmChart.destroy();vmChart=null;}
+    var maxV=Math.max.apply(null,vals.concat([1]));
+    vmChart=new Chart(canvas,{
+      type:'line',
+      data:{
+        labels:months.slice(0,vals.length),
+        datasets:[{
+          data:vals,
+          borderColor:'#c8102e',
+          backgroundColor:'rgba(200,16,46,0.15)',
+          fill:true,
+          tension:0.4,
+          pointBackgroundColor:'#c8102e',
+          pointRadius:4,
+          pointHoverRadius:6,
+          borderWidth:2
+        }]
+      },
+      options:{
+        responsive:true,
+        plugins:{legend:{display:false},tooltip:{
+          callbacks:{label:function(ctx){return fmtINR(ctx.parsed.y);}}
+        }},
+        scales:{
+          x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b',font:{size:10}}},
+          y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b',font:{size:10},
+             callback:function(v){return fmtShort(v);}}}
+        }
+      }
+    });
+  },50);
+}
+
+function closeViewModal(){
+  $('viewModal').classList.add('hidden');
+  if(vmChart){vmChart.destroy();vmChart=null;}
+}
+
+// ── Partner Row HTML ──────────────────────────────────────────────────
+function partnerRow(p, showZone){
+  var isActive=p.active&&p.active.toLowerCase().includes('active');
+  var mom=momPct(p.mtd,p.lmtd);
+  var momCls=mom.startsWith('+')?'val-green':mom.startsWith('-')?'val-red':'';
+  var mtdCls=p.mtd>p.lmtd?'val-green':p.mtd<p.lmtd?'val-red':'val-amber';
+
+  var row='<tr>'+
+    '<td><button class="btn-view" onclick="openViewModal(\''+esc(p.gid)+'\')">View</button></td>'+
+    '<td>'+esc(p.gid)+'</td>'+
+    '<td class="name-cell">'+esc(p.name)+'</td>'+
+    '<td>'+esc(p.city)+'</td>'+
+    '<td>'+esc(p.state)+'</td>';
+  if(showZone) row+='<td>'+esc(p.zone)+'</td>';
+  if(showZone) row+='<td>'+esc(p.oName)+'</td><td>'+esc(p.oRole)+'</td>';
+  row+=
+    '<td>'+fmtINR(p.maxPot)+'</td>'+
+    '<td>'+fmtINR(p.oPot)+'</td>'+
+    '<td>'+(p.target>0?fmtINR(p.target):'<span style="color:#64748b">—</span>')+'</td>'+
+    '<td class="'+mtdCls+'">'+fmtINR(p.mtd)+'</td>'+
+    '<td>'+fmtINR(p.lmtd)+'</td>'+
+    '<td class="'+momCls+'">'+mom+'</td>'+
+    '<td>'+growthPill(p.growthFmt)+'</td>'+
+    '<td class="'+achColor(p.targetAch)+'">'+p.targetAchFmt+'</td>'+
+    '<td>'+(isActive?'<span class="badge-active">Active</span>':'<span class="badge-inactive">Inactive</span>')+'</td>'+
+    '<td>'+p.calls+'</td>'+
+    '<td>'+p.visits+'</td>'+
+  '</tr>';
+  return row;
+}
+
+// ── Pagination ────────────────────────────────────────────────────────
+function renderPagination(id,current,total,onPage){
+  if(total<=1){$(id).innerHTML='';return;}
+  var html='<span class="pg-info">Page '+current+' of '+total+'</span>';
+  html+='<button class="pg-btn" '+(current===1?'disabled':'')+' data-pg="'+(current-1)+'">‹</button>';
+  var s=Math.max(1,current-2),e=Math.min(total,current+2);
+  for(var i=s;i<=e;i++){
+    html+='<button class="pg-btn'+(i===current?' active':'')+'" data-pg="'+i+'">'+i+'</button>';
+  }
+  html+='<button class="pg-btn" '+(current===total?'disabled':'')+' data-pg="'+(current+1)+'">›</button>';
+  $(id).innerHTML=html;
+  $(id).querySelectorAll('.pg-btn:not([disabled])').forEach(function(btn){
+    btn.addEventListener('click',function(){onPage(parseInt(this.dataset.pg));});
+  });
+}
+
+// ── Select Helpers ────────────────────────────────────────────────────
+function populateSelect(id,vals){
+  var el=$(id); if(!el) return;
+  var first=el.options[0].textContent;
+  el.innerHTML='<option value="">'+first+'</option>'+
+    vals.filter(Boolean).sort().map(function(v){return '<option>'+esc(v)+'</option>';}).join('');
+}
+function uniq(arr){
+  var seen={},out=[];
+  arr.forEach(function(v){var s=String(v||'').trim();if(s&&!seen[s]){seen[s]=true;out.push(s);}});
+  return out.sort();
+}
+
+// ── CSV Export ────────────────────────────────────────────────────────
+window.exportCSV=function(which){
+  var list=which==='mine'?MP_FILTERED:AP_FILTERED;
+  if(!list||!list.length){alert('Nothing to export.');return;}
+  var h=['GID','Name','City','State','Zone','Owner','Role','MaxPot','OverallPot','Target','MTD','LMTD','MoM%','Growth%','Ach%','Status','Calls','Visits'];
+  var rows=[h.join(',')];
+  list.forEach(function(p){
+    rows.push([p.gid,p.name,p.city,p.state,p.zone,p.oName,p.oRole,
+               p.maxPot,p.oPot,p.target,p.mtd,p.lmtd,momPct(p.mtd,p.lmtd),
+               p.growthFmt,p.targetAchFmt,p.active,p.calls,p.visits]
+      .map(function(v){return '"'+String(v||'').replace(/"/g,'""')+'"';}).join(','));
   });
   var blob=new Blob([rows.join('\n')],{type:'text/csv'});
   var url=URL.createObjectURL(blob);
-  var a=document.createElement('a');
-  a.href=url; a.download='partners_export.csv'; a.click();
+  var a=document.createElement('a');a.href=url;a.download='partners.csv';a.click();
   URL.revokeObjectURL(url);
-}
+};
 
-// ── Summarize a partner list ─────────────────────────────────
-function summarizeList(partners){
-  var s={total:partners.length,mtd:0,lmtd:0,ftd:0,calls:0,visits:0,
-         maxPot:0,oPot:0,target:0,active:0,inactive:0,
-         connected:0,notConn:0,growth:0,degrowth:0,mom:0};
-  partners.forEach(function(p){
-    s.mtd+=p.mtd||0; s.lmtd+=p.lmtd||0; s.ftd+=p.ftd||0;
-    s.calls+=p.calls||0; s.visits+=p.visits||0;
-    s.maxPot+=p.maxPot||0; s.oPot+=p.oPot||0; s.target+=p.target||0;
-    var a=String(p.active||'').toLowerCase();
-    if(String(p.active||'').toLowerCase()==='active') s.active++; else s.inactive++;
-    if(p.calls>0||p.visits>0) s.connected++; else s.notConn++;
-    var g=String(p.growth||'').toLowerCase();
-    var gnv=parseFloat(String(p.growth||'').replace(/%/g,'').trim())||0;
-    if(gnv>0) s.growth++; else if(gnv<0) s.degrowth++;
-  });
-  s.mom=s.lmtd>0?Math.round((s.mtd-s.lmtd)*100/s.lmtd):0;
-  return s;
-}
-
-// ── Session restore ──────────────────────────────────────────
-function tryRestore(){
-  var saved=localStorage.getItem('pe_user');
-  if(saved){
-    try{
-      USER=JSON.parse(saved);
-      loadDashboard();
-      return;
-    }catch(e){ localStorage.removeItem('pe_user'); }
-  }
-  initLogin();
-}
-
-// ── Boot ─────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded',function(){
-  tryRestore();
-  $('partnerModal')&&$('partnerModal').addEventListener('click',function(e){
-    if(e.target===$('partnerModal')) $('partnerModal').classList.remove('open');
-  });
-});
+// ── Trigger initial filter ────────────────────────────────────────────
+function apply(){apFilter();mpFilter();tpFilter();}
 
 })();

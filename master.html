@@ -1,206 +1,163 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Master Dashboard — InsuranceDekho</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
-<body>
+<body class="dashboard-body">
 
-<div id="loadingScreen">
-  <div class="spinner"></div>
-  <p id="loadingMsg">Loading master dashboard…</p>
-</div>
-
-<div id="appShell" style="display:none">
-  <div id="header">
+<!-- TOP BAR -->
+<header class="topbar">
+  <div class="topbar-left">
     <div class="brand">
-      <div class="brand-logo">ID</div>
-      <div class="brand-text">
-        <div class="brand-title">Master Dashboard</div>
-        <div class="brand-sub">InsuranceDekho Performance Portal — All Zones</div>
-      </div>
-    </div>
-    <div class="user-info">
+      <span class="brand-mark master-mark">★</span>
       <div>
-        <div class="user-name" id="hdrName">—</div>
-        <div class="user-role" id="hdrRole">MASTER</div>
+        <div class="brand-name">Master Dashboard</div>
+        <div class="brand-sub">Central Team · Pan-India View</div>
       </div>
-      <button id="btnLogout">Logout</button>
     </div>
   </div>
-
-  <div id="nav">
-    <button class="nav-tab active" data-tab="overview">Overview</button>
-    <button class="nav-tab" data-tab="zones">Zone Summary</button>
-    <button class="nav-tab" data-tab="allPartners">All Partners</button>
-    <button class="nav-tab" data-tab="amPerf">AM Performance</button>
-    <button class="nav-tab" data-tab="teleRM">📞 Tele-RM</button>
-    <button class="nav-tab" data-tab="unconnected">Unconnected</button>
-    <button class="nav-tab" data-tab="loginActivity">Login Activity</button>
+  <div class="topbar-right">
+    <div class="user-chip">
+      <div class="user-chip-name" id="userName">—</div>
+      <div class="user-chip-role" id="userRole">MASTER</div>
+    </div>
+    <button class="btn-ghost" id="btnLogout">Logout</button>
   </div>
+</header>
 
-  <div id="main">
+<!-- TABS: Overview | All Partners | Zone tabs | Tele-RM | Login Activity -->
+<!-- REMOVED: AM Performance, Daily Run Rate -->
+<nav class="tabs" id="navTabs">
+  <button class="tab active" data-tab="overview">Overview</button>
+  <button class="tab" data-tab="all">All Partners</button>
+  <button class="tab" data-tab="north">Zone: North</button>
+  <button class="tab" data-tab="south">Zone: South</button>
+  <button class="tab" data-tab="east">Zone: East &amp; Central</button>
+  <button class="tab" data-tab="west">Zone: West</button>
+  <button class="tab" data-tab="ron">Zone: RON</button>
+  <button class="tab" data-tab="tele">Tele-RM</button>
+  <button class="tab" data-tab="logins">Login Activity</button>
+</nav>
 
-    <!-- OVERVIEW -->
-    <div id="page-overview" class="page active">
-      <div class="page-header">
-        <h2>National Overview</h2>
-        <p>Consolidated view across all 5 zones. Tele-RM shown separately.</p>
-      </div>
-      <div class="metric-grid" style="margin-bottom:14px;">
-        <div class="metric-card" style="border-left:3px solid var(--id-red);">
-          <div class="mc-label">Total Partners (5 Zones)</div>
-          <div class="mc-value" id="m_total">—</div>
-          <div class="mc-sub">
-            <span class="badge badge-green" id="m_active">Active: 0</span>
-            <span class="badge badge-red" id="m_inactive">Inactive: 0</span>
-          </div>
-        </div>
-        <div class="metric-card" style="border-left:3px solid var(--green);">
-          <div class="mc-label">National MTD (May'26)</div>
-          <div class="mc-value rupee" id="m_mtd">0</div>
-          <div class="mc-sub">
-            <span class="badge badge-grey" id="m_mom">MoM: 0%</span>
-            <span class="badge badge-grey" id="m_ach">Ach: 0%</span>
-          </div>
-        </div>
-        <div class="metric-card" style="border-left:3px solid var(--amber);">
-          <div class="mc-label">Engagement</div>
-          <div class="mc-value" id="m_eng">0/0</div>
-          <div class="mc-sub">
-            <span class="badge badge-blue" id="m_conn">Connected: 0</span>
-            <span class="badge badge-amber" id="m_notconn">Not: 0</span>
-          </div>
-        </div>
-      </div>
-      <div class="metric-grid sm" style="margin-bottom:14px;">
-        <div class="metric-card card-sm"><div class="mc-label">Max Potential</div><div class="mc-value rupee" id="m_maxpot" style="font-size:20px;">0</div></div>
-        <div class="metric-card card-sm"><div class="mc-label">Overall Potential</div><div class="mc-value rupee" id="m_opot" style="font-size:20px;">0</div></div>
-        <div class="metric-card card-sm"><div class="mc-label">National Target</div><div class="mc-value rupee" id="m_target" style="font-size:20px;">0</div></div>
-        <div class="metric-card card-sm"><div class="mc-label">Calls</div><div class="mc-value" id="m_calls" style="font-size:20px;color:var(--green)">0</div></div>
-        <div class="metric-card card-sm"><div class="mc-label">Visits</div><div class="mc-value" id="m_visits" style="font-size:20px;color:var(--red)">0</div></div>
-        <div class="metric-card card-sm"><div class="mc-label">Growth / Degrowth</div><div class="mc-value" id="m_gd" style="font-size:16px">0 / 0</div></div>
-      </div>
-      <div class="chart-grid">
-        <div class="chart-card"><div class="cc-title">Active vs Inactive</div><div class="donut-wrap" id="m_chartActive"></div></div>
-        <div class="chart-card"><div class="cc-title">Connected vs Not Connected</div><div class="donut-wrap" id="m_chartConn"></div></div>
-        <div class="chart-card"><div class="cc-title">Growth vs Degrowth</div><div class="donut-wrap" id="m_chartGrowth"></div></div>
-      </div>
-    </div>
+<div id="statusBar" class="status-bar hidden"></div>
 
-    <!-- ZONE SUMMARY -->
-    <div id="page-zones" class="page">
-      <div class="page-header"><h2>Zone Summary</h2><p>Click any zone card to see all ZH/AM performance within that zone.</p></div>
-      <div class="team-grid" id="m_zoneGrid"></div>
-    </div>
+<!-- ======= OVERVIEW ======= -->
+<section class="tab-pane active" id="pane-overview">
+  <h2 class="section-title">Pan-India Overview</h2>
+  <p class="section-sub">Aggregate across all 5 zones (excluding Tele-RM).</p>
+  <div id="overviewContent">
+    <div class="empty-state"><div class="es-icon">⏳</div><div class="es-msg">Loading…</div></div>
+  </div>
+</section>
 
-    <!-- ALL PARTNERS -->
-    <div id="page-allPartners" class="page">
-      <div class="page-header"><h2>All Partners</h2><p>All partners across 5 zones. Click View for 14-month trend.</p></div>
-      <div class="filter-bar">
-        <input type="text" id="m_apSearch" placeholder="Search name / GID / city…">
-        <select id="m_apZone"><option value="">All zones</option></select>
-        <select id="m_apState"><option value="">All states</option></select>
-        <select id="m_apOwner"><option value="">All owners</option></select>
-        <select id="m_apStatus"><option value="">All status</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
-        <select id="m_apTrend"><option value="">All trend</option><option value="growth">Growth</option><option value="degrowth">Degrowth</option></select>
-        <button class="btn btn-outline" id="m_apClear">Clear</button>
-        <button class="btn btn-primary" id="m_apExport">Export CSV</button>
-      </div>
-      <div style="font-size:13px;color:var(--text2);margin-bottom:10px;" id="m_apCount">0 partners</div>
-      <div class="table-wrap">
-        <table class="tbl" id="m_apTable">
-          <thead><tr>
-            <th>Partner</th><th>City/State</th><th>Zone</th><th>Owner</th>
-            <th>Max Pot.</th><th>Overall Pot.</th><th>Target</th>
-            <th>MTD</th><th>LMTD</th><th>MoM%</th>
-            <th>Growth</th><th>Status</th><th>Calls</th><th>Visits</th><th>Action</th>
-          </tr></thead>
-          <tbody id="m_apBody"></tbody>
-        </table>
-        <div class="pagination" id="m_apPagination"></div>
-      </div>
-    </div>
+<!-- ======= ALL PARTNERS ======= -->
+<section class="tab-pane" id="pane-all">
+  <h2 class="section-title">All Partners</h2>
+  <p class="section-sub">Complete partner list — all zones. Filter, search, export.</p>
+  <div class="filter-bar">
+    <input type="text" id="apSearch" placeholder="Search name / GID / city…" oninput="apFilter()"/>
+    <select id="apZone"   onchange="apFilter()"><option value="">All Zones</option></select>
+    <select id="apState"  onchange="apFilter()"><option value="">All States</option></select>
+    <select id="apStatus" onchange="apFilter()"><option value="">All Status</option><option>Active</option><option>Inactive</option></select>
+    <select id="apOwner"  onchange="apFilter()"><option value="">All Owners (ZH–AM)</option></select>
+    <button class="btn-clear" onclick="apClear()">Clear</button>
+    <button class="btn-export" onclick="exportAll()">Export CSV</button>
+  </div>
+  <div class="table-wrap">
+    <table class="ptable">
+      <thead>
+        <tr>
+          <th>View</th><th>GID</th><th>Partner Name</th><th>City</th><th>State</th>
+          <th>Zone</th><th>Owner (AM)</th><th>Role</th>
+          <th>Max Pot</th><th>Overall Pot</th><th>Target</th>
+          <th>MTD</th><th>LMTD</th><th>MoM%</th><th>Growth%</th>
+          <th>Ach%</th><th>Status</th><th>Calls</th><th>Visits</th>
+        </tr>
+      </thead>
+      <tbody id="apTbody"></tbody>
+    </table>
+  </div>
+  <div id="apPagination" class="pg-wrap"></div>
+</section>
 
-    <!-- AM PERFORMANCE -->
-    <div id="page-amPerf" class="page">
-      <div class="page-header"><h2>AM Performance — National</h2><p>All AMs across all zones. Click for partner drill-down.</p></div>
-      <div class="filter-bar">
-        <input type="text" id="m_amSearch" placeholder="Search AM name…">
-        <select id="m_amZone"><option value="">All zones</option></select>
-        <select id="m_amSort"><option value="mtd_desc">MTD High→Low</option><option value="name_asc">Name A→Z</option><option value="count_desc">Most Partners</option></select>
-      </div>
-      <div class="team-grid" id="m_amGrid"></div>
-    </div>
+<!-- ======= ZONE SECTIONS (North, South, East & Central, West, RON) ======= -->
+<!-- Each zone section shows: KPIs + Team Performance (with filters) + Partner table -->
 
-    <!-- TELE-RM -->
-    <div id="page-teleRM" class="page">
-      <div class="page-header"><h2>📞 Tele-RM Dashboard</h2><p>Completely separate from 5 main zones. ZH: Ayush Gupta.</p></div>
-      <div class="metric-grid" id="m_teleMetrics" style="margin-bottom:14px;"></div>
-      <div class="team-grid" id="m_teleTeam"></div>
-      <div style="margin-top:16px;" id="m_teleTableWrap"></div>
-    </div>
+<section class="tab-pane" id="pane-north">
+  <h2 class="section-title">Zone: North</h2>
+  <p class="section-sub">All partners and team heads in the North zone.</p>
+  <div id="zone-north-content"><div class="empty-state"><div class="es-icon">⏳</div><div class="es-msg">Loading…</div></div></div>
+</section>
 
-    <!-- UNCONNECTED -->
-    <div id="page-unconnected" class="page">
-      <div class="page-header"><h2>Unconnected Partners</h2><p>Partners with 0 calls & 0 visits — sorted by Overall Potential (highest first).</p></div>
-      <div class="table-wrap">
-        <table class="tbl">
-          <thead><tr>
-            <th>Partner</th><th>City/State</th><th>Zone</th><th>Owner</th>
-            <th>Overall Pot.</th><th>Max Pot.</th><th>MTD</th><th>Status</th>
-          </tr></thead>
-          <tbody id="m_unconnBody"></tbody>
-        </table>
-        <div class="pagination" id="m_unconnPagination"></div>
-      </div>
-    </div>
+<section class="tab-pane" id="pane-south">
+  <h2 class="section-title">Zone: South</h2>
+  <p class="section-sub">All partners and team heads in the South zone.</p>
+  <div id="zone-south-content"><div class="empty-state"><div class="es-icon">⏳</div><div class="es-msg">Loading…</div></div></div>
+</section>
 
-    <!-- LOGIN ACTIVITY -->
-    <div id="page-loginActivity" class="page">
-      <div class="page-header"><h2>Login Activity</h2><p>Who's logging in and how often.</p></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-        <div>
-          <div style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">User Login Count</div>
-          <div class="table-wrap">
-            <table class="tbl"><thead><tr><th>User</th><th>Role</th><th>Logins</th><th>Last Login</th></tr></thead>
-            <tbody id="m_loginUsers"></tbody></table>
-          </div>
-        </div>
-        <div>
-          <div style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Recent Activity</div>
-          <div class="table-wrap" style="max-height:500px;overflow-y:auto;">
-            <table class="tbl"><thead><tr><th>Date</th><th>Name</th><th>GID</th><th>Role</th></tr></thead>
-            <tbody id="m_loginRecent"></tbody></table>
-          </div>
-        </div>
-      </div>
-    </div>
+<section class="tab-pane" id="pane-east">
+  <h2 class="section-title">Zone: East &amp; Central</h2>
+  <p class="section-sub">All partners and team heads in the East &amp; Central zone.</p>
+  <div id="zone-east-content"><div class="empty-state"><div class="es-icon">⏳</div><div class="es-msg">Loading…</div></div></div>
+</section>
 
-  </div><!-- #main -->
-</div><!-- #appShell -->
+<section class="tab-pane" id="pane-west">
+  <h2 class="section-title">Zone: West</h2>
+  <p class="section-sub">All partners and team heads in the West zone.</p>
+  <div id="zone-west-content"><div class="empty-state"><div class="es-icon">⏳</div><div class="es-msg">Loading…</div></div></div>
+</section>
 
-<!-- PARTNER MODAL -->
-<div class="modal-overlay" id="partnerModal">
+<section class="tab-pane" id="pane-ron">
+  <h2 class="section-title">Zone: RON</h2>
+  <p class="section-sub">All partners and team heads in the RON zone.</p>
+  <div id="zone-ron-content"><div class="empty-state"><div class="es-icon">⏳</div><div class="es-msg">Loading…</div></div></div>
+</section>
+
+<!-- ======= TELE-RM ======= -->
+<section class="tab-pane" id="pane-tele">
+  <h2 class="section-title">Tele-RM</h2>
+  <p class="section-sub">Partners managed by Tele-RM channel — tracked separately.</p>
+  <div id="teleContent"><div class="empty-state"><div class="es-icon">⏳</div><div class="es-msg">Loading…</div></div></div>
+</section>
+
+<!-- ======= LOGIN ACTIVITY ======= -->
+<section class="tab-pane" id="pane-logins">
+  <h2 class="section-title">Login Activity</h2>
+  <p class="section-sub">Recent portal logins across all users.</p>
+  <div id="loginsContent">
+    <div class="empty-state"><div class="es-icon">⏳</div><div class="es-msg">Loading…</div></div>
+  </div>
+</section>
+
+<!-- ======= VIEW MODAL ======= -->
+<div class="modal-overlay hidden" id="viewModal">
   <div class="modal-box">
     <div class="modal-header">
-      <div><div class="mh-title" id="modalName">—</div><div class="mh-gid" id="modalGID">—</div></div>
-      <button class="modal-close" id="modalClose">✕</button>
+      <div>
+        <div class="modal-partner-name" id="vmName">—</div>
+        <div class="modal-partner-meta" id="vmMeta">—</div>
+      </div>
+      <button class="modal-close" onclick="closeViewModal()">✕</button>
     </div>
-    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-body" id="vmBody"></div>
   </div>
 </div>
 
-<!-- ZONE/TEAM DRILL MODAL -->
-<div class="modal-overlay" id="teamModal">
-  <div class="modal-box" style="max-width:1100px;">
+<!-- ======= DRILL MODAL (Team member → partners) ======= -->
+<div class="modal-overlay hidden" id="drillModal">
+  <div class="modal-box" style="max-width:900px;">
     <div class="modal-header">
-      <div><div class="mh-title" id="tmModalName">—</div><div class="mh-gid" id="tmModalSub">—</div></div>
-      <button class="modal-close" id="tmModalClose">✕</button>
+      <div>
+        <div class="modal-partner-name" id="drillTitle">—</div>
+        <div class="modal-partner-meta" id="drillMeta">—</div>
+      </div>
+      <button class="modal-close" onclick="closeDrillModal()">✕</button>
     </div>
-    <div class="modal-body" id="tmModalBody"></div>
+    <div class="modal-body" id="drillBody"></div>
   </div>
 </div>
 
