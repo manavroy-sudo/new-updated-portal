@@ -1,510 +1,734 @@
-// ====================================================================
-// AM and Above Focused Partners — app.js v6
-// ====================================================================
+/* ============================================================
+   Partner Engage Portal — app.js v12
+   For: ZH / SH / RH / RM / AM users
+   Light theme | Tele-RM tab | Fixed charts | Fixed login
+   ============================================================ */
 (function(){
 'use strict';
-const userJson=sessionStorage.getItem('peUser');
-if(!userJson){location.href='index.html';return;}
-const user=JSON.parse(userJson);
 
-const MONTHS=["Apr'25","May'25","Jun'25","Jul'25","Aug'25","Sep'25","Oct'25","Nov'25","Dec'25","Jan'26","Feb'26","Mar'26","Apr'26"];
-let state={partners:[],myPartners:[],team:[],amPerf:[],summary:null,overallProject:null,myZones:[],filterOptions:{states:[],cities:[],owners:[]},charts:{},dailyHistory:[],runRate:0,todayMTD:0,yesterdayMTD:0};
+var API_URL = window.API_URL||(window.CONFIG&&CONFIG.API_URL)||'';
+var session = JSON.parse(sessionStorage.getItem('pe_session')||'{}');
+if(!session.empId){ window.location.href='index.html'; return; }
 
-const $=id=>document.getElementById(id);
-const fmtINR=n=>{if(!isFinite(n)||n===0)return '₹0';if(n>=1e7)return '₹'+(n/1e7).toFixed(2)+' Cr';if(n>=1e5)return '₹'+(n/1e5).toFixed(2)+' L';if(n>=1e3)return '₹'+(n/1e3).toFixed(1)+'K';return '₹'+Math.round(n).toLocaleString('en-IN');};
-const fmtInt=n=>Number(n||0).toLocaleString('en-IN');
-const safe=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
-const pct=(a,b)=>b>0?Math.round((a-b)/b*100):0;
-
-$('userName').textContent=user.name||user.gid;
-$('userRole').textContent=user.role+(user.zone?' • '+user.zone:'');
-$('btnLogout').addEventListener('click',()=>{sessionStorage.removeItem('peUser');location.href='index.html';});
-
-// ── tabs ──
-document.querySelectorAll('.tab').forEach(tab=>{
-  tab.addEventListener('click',()=>{
-    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-    tab.classList.add('active');
-    const id=tab.dataset.tab;
-    document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
-    $('pane-'+id).classList.add('active');
-    if(id==='team')    renderTeam();
-    if(id==='mine')    renderMine();
-    if(id==='am')      renderAm();
-    if(id==='overall') renderCharts();
-    if(id==='runrate') renderRunRate();
-  });
-});
-
-if(user.role==='AM'){
-  $('tabMine').style.display='none';
-  $('tabAm').style.display='none';
-  $('tabTeam').style.display='none';
-}
-
-function setStatus(msg,kind){const bar=$('statusBar');bar.className='status-bar '+(kind||'');bar.textContent=msg;bar.classList.toggle('hidden',!msg);}
-
-// ── Load ──
-function loadDashboard(){
-  setStatus('Loading data from master sheet…','loading');
-  fetch(API_URL+'?action=getDashboard&gid='+encodeURIComponent(user.gid))
-    .then(r=>r.json()).then(res=>{
-      if(!res.success){setStatus(res.message||'Failed.','error');return;}
-      state.partners     =res.partners||[];
-      state.myPartners   =res.myPartners||[];
-      state.team         =res.teamBreakdown||[];
-      state.amPerf       =res.amPerformance||[];
-      state.summary      =res.summary;
-      state.overallProject=res.overallProject;
-      state.filterOptions=res.filterOptions||{states:[],cities:[],owners:[]};
-      state.myZones      =res.myZones||[];
-      state.runRate      =res.dailyRunRate||0;
-      state.yesterdayMTD =res.yesterdayMTD||0;
-      state.todayMTD     =res.summary?res.summary.currentMonthPremium:0;
-      renderZoneChips();
-      populateFilterOptions();
-      renderOverall();
-      renderKpiRow();
-      renderTable();
-      renderCharts();
-      setStatus('','');
-      // Load daily tracking separately
-      loadDailyTracking();
-    }).catch(err=>setStatus('Connection error: '+err.message,'error'));
-}
-
-function loadDailyTracking(){
-  fetch(API_URL+'?action=getDailyTracking&gid='+encodeURIComponent(user.gid))
-    .then(r=>r.json()).then(res=>{
-      if(!res.success) return;
-      state.dailyHistory =res.history||[];
-      state.runRate      =res.runRate||0;
-      state.todayMTD     =res.todayMTD||state.todayMTD;
-      state.yesterdayMTD =res.yesterdayMTD||0;
-      renderRunRateStrip();
-    }).catch(()=>{});
-}
-
-function renderZoneChips(){
-  const c=$('zoneChips');if(!c)return;
-  c.innerHTML=state.myZones.length?'Zone: '+state.myZones.map(z=>`<span class="role-chip">${safe(z)}</span>`).join(' '):'';
-}
-
-// ── Overview ──
-function renderOverall(){
-  const op=state.overallProject;if(!op)return;
-  $('op-totalPartners').textContent=fmtInt(op.totalPartners);
-  $('op-active').textContent=fmtInt(op.activePartners);
-  $('op-inactive').textContent=fmtInt(op.inactivePartners);
-  $('op-business').textContent=fmtINR(op.businessGenerated);
-  const mom=op.momPct;
-  $('op-mom').textContent=(mom>=0?'+':'')+mom+'%';
-  const pill=$('op-momPill');
-  pill.classList.remove('pill-green','pill-red');
-  pill.classList.add(mom>=0?'pill-green':'pill-red');
-  $('op-ach').textContent=op.achievementPct+'%';
-  $('op-connected').textContent=fmtInt(op.connectedPartners)+' / '+fmtInt(op.totalPartners);
-  $('op-conn').textContent=fmtInt(op.connectedPartners);
-  $('op-notconn').textContent=fmtInt(op.nonConnectedPartners);
-  $('op-mtd').textContent=fmtINR(op.businessGenerated);
-  $('op-lmtd').textContent=fmtINR(op.lmtd||0);
-  $('op-mtdSub').textContent=(mom>=0?'▲ +':'▼ ')+Math.abs(mom)+'% vs last month';
-  $('op-mtdSub').className='kpi-sub '+(mom>=0?'pos':'neg');
-  $('op-maxpot').textContent=fmtINR(op.maxPotential);
-  $('op-overallpot').textContent=fmtINR(op.overallPotential);
-  $('op-target').textContent=fmtINR(op.target);
-  $('op-maxAch').textContent=op.maxPotAchPct+'%';
-  $('op-calls').textContent=fmtInt(op.calls);
-  $('op-visits').textContent=fmtInt(op.visits);
-  $('op-growth').textContent=fmtInt(op.growthCount);
-  $('op-degrowth').textContent=fmtInt(op.degrowthCount);
-}
-
-// ── Improved Charts ──
-const CHART_COLORS={
-  green:'rgba(22,163,74,1)', greenLight:'rgba(22,163,74,0.15)',
-  red:'rgba(220,38,38,1)',   redLight:'rgba(220,38,38,0.15)',
-  blue:'rgba(37,99,235,1)',  blueLight:'rgba(37,99,235,0.15)',
-  amber:'rgba(245,158,11,1)',amberLight:'rgba(245,158,11,0.15)',
-  purple:'rgba(147,51,234,1)',purpleLight:'rgba(147,51,234,0.15)'
+var state = {
+  data:null, loading:false, activeTab:'overview',
+  partnerSearch:'', partnerStatusFilter:'', stateTab:'field',
+  teleSearch:'', teleStatus:''
 };
 
-function destroyChart(name){if(state.charts[name]){state.charts[name].destroy();state.charts[name]=null;}}
+// ── Helpers ─────────────────────────────────────────────────
+function $(id){ return document.getElementById(id); }
+function fmt(v,cr){
+  if(v===undefined||v===null||isNaN(v)) return '—';
+  var abs=Math.abs(v), pref=v<0?'-':'', s='';
+  if(cr){
+    if(abs>=10000000) s=(abs/10000000).toFixed(2)+' Cr';
+    else if(abs>=100000) s=(abs/100000).toFixed(2)+' L';
+    else if(abs>=1000) s=(abs/1000).toFixed(1)+' K';
+    else s=abs.toLocaleString('en-IN');
+    return '₹'+pref+s;
+  }
+  return pref+(abs>=10000000?(abs/10000000).toFixed(2)+' Cr':abs>=100000?(abs/100000).toFixed(2)+' L':abs.toLocaleString('en-IN'));
+}
+function fmtPct(v){ if(v===undefined||v===null||isNaN(v)) return '—'; return (v>0?'+':'')+v.toFixed(1)+'%'; }
+function fmtN(v){ return (v||0).toLocaleString('en-IN'); }
+function clr(v){ return v>=0?'green':'red'; }
+function mtdClr(mtd,lmtd){ return mtd>=lmtd?'green':'red'; }
+function showLoading(show){ var el=$('loadingBar'); if(el) el.style.display=show?'block':'none'; }
+function safe(s){ return String(s||'').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function debounce(fn,ms){ var t; return function(){clearTimeout(t);t=setTimeout(fn,ms);}; }
 
-function makeDoughnut(canvasId, labels, data, colors, name){
-  destroyChart(name);
-  const canvas=$(canvasId);if(!canvas)return;
-  const total=data.reduce((a,b)=>a+b,0);
-  state.charts[name]=new Chart(canvas,{
-    type:'doughnut',
-    data:{labels,datasets:[{data,backgroundColor:colors,borderWidth:0,hoverOffset:8,borderRadius:4}]},
+// ── API ──────────────────────────────────────────────────────
+function apiFetch(params,cb){
+  var url=API_URL+'?'+Object.entries(params).map(function(kv){return encodeURIComponent(kv[0])+'='+encodeURIComponent(kv[1]);}).join('&');
+  var cbName='cb_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+  window[cbName]=function(data){
+    try{delete window[cbName];}catch(e){}
+    var s=document.getElementById('_jsonp_'+cbName);
+    if(s) s.parentNode.removeChild(s);
+    cb(null,data);
+  };
+  var s=document.createElement('script');
+  s.id='_jsonp_'+cbName;
+  s.src=url+'&callback='+cbName;
+  s.onerror=function(){cb(new Error('API error — check network or redeploy Apps Script'));};
+  document.head.appendChild(s);
+}
+
+function loadData(){
+  if(state.loading) return;
+  state.loading=true; showLoading(true);
+  apiFetch({action:'getData',uid:session.empId},function(err,data){
+    state.loading=false; showLoading(false);
+    if(err||!data||!data.success){ showError(err?err.message:data&&data.message||'Load failed'); return; }
+    state.data=data;
+    renderAll();
+  });
+}
+
+function showError(msg){ var el=$('errorBanner'); if(el){el.textContent=msg;el.style.display='block';setTimeout(function(){el.style.display='none';},8000);} }
+
+// ── Setup header ─────────────────────────────────────────────
+(function initHeader(){
+  var n=$('headerName'), r=$('headerRole'), z=$('dashZone');
+  if(n) n.textContent=session.name||session.empId||'—';
+  if(r) r.textContent=(session.role||'')+(session.zone?' · '+session.zone:'');
+  if(z) z.textContent=(session.zone||'')+(session.role?' — '+session.role:'');
+  var dt=$('dashTitle'); if(dt) dt.textContent='Partner Engage Portal';
+})();
+
+// ── Render all ───────────────────────────────────────────────
+function renderAll(){
+  renderKPIStrip();
+  renderTab(state.activeTab);
+}
+
+function renderKPIStrip(){
+  var d=state.data; if(!d) return;
+  var op=d.overallProject||{};
+  var mClr=mtdClr(op.businessGenerated,op.lmtd);
+  var sets=[
+    {id:'hFTD',    val:fmt(op.ftd,true),              cls:'blue'},
+    {id:'hMTD',    val:fmt(op.businessGenerated,true), cls:mClr},
+    {id:'hLMTD',   val:fmt(op.lmtd,true),             cls:'muted'},
+    {id:'hActive', val:fmtN(op.activePartners),        cls:'green'},
+    {id:'hConnected',val:fmtN(op.connectedPartners),   cls:'blue'},
+    {id:'hCalls',  val:fmtN(op.totalCalls),            cls:''},
+    {id:'hVisits', val:fmtN(op.totalVisits),           cls:''}
+  ];
+  sets.forEach(function(s){
+    var el=$(s.id); if(!el) return;
+    el.className='kpi-val'+( s.cls?' '+s.cls:'');
+    el.textContent=s.val;
+  });
+}
+
+// ── Tab routing ──────────────────────────────────────────────
+function renderTab(tab){
+  state.activeTab=tab;
+  document.querySelectorAll('.nav-tab').forEach(function(el){
+    el.classList.toggle('active',el.dataset.tab===tab);
+  });
+  var views=['overview','stateRank','rolePerf','myPartners','teleRM','cities','loginActivity'];
+  views.forEach(function(v){ var el=$(v+'View'); if(el) el.style.display=v===tab?'block':'none'; });
+  switch(tab){
+    case 'overview':      renderOverview(); break;
+    case 'stateRank':     renderStateRank(); break;
+    case 'rolePerf':      renderRolePerf(); break;
+    case 'myPartners':    renderMyPartners(); break;
+    case 'teleRM':        renderTeleRM(); break;
+    case 'cities':        renderCities(); break;
+    case 'loginActivity': renderLoginActivity(); break;
+  }
+}
+
+// ── Overview ─────────────────────────────────────────────────
+function renderOverview(){
+  var d=state.data; if(!d) return;
+  renderCharts();
+  renderOwnerCards('zhCards',  d.zhPerf,  'ZH',  false);
+  renderOwnerCards('shCards',  d.shPerf,  'SH',  false);
+  renderOwnerCards('rhCards',  d.rhPerf,  'RH',  false);
+  renderOwnerCards('rmCards',  d.rmPerf,  'RM',  false);
+  renderOwnerCards('amCards',  d.amPerf,  'AM',  false);
+  // Hide sections with no data
+  ['zh','sh','rh','rm','am'].forEach(function(role){
+    var arr=d[role+'Perf']; var sec=$(role+'Section');
+    if(sec) sec.style.display=(arr&&arr.length)?'block':'none';
+  });
+}
+
+function renderOwnerCards(containerId,perf,role,isTele){
+  var el=$(containerId); if(!el) return;
+  if(!perf||!perf.length){ el.innerHTML='<div class="empty-state"><div class="empty-state-text">No '+role+' data for your scope</div></div>'; return; }
+  var html='';
+  perf.slice(0,30).forEach(function(o){
+    var mClr=mtdClr(o.mtd,o.lmtd);
+    var achClr=o.achPct>=100?'green':o.achPct>=50?'amber':'red';
+    html+='<div class="card'+(isTele?' tele-card':'')+'" onclick="openOwnerDrill(\''+safe(o.empId)+'\')">';
+    html+='<div class="card-name">'+safe(o.name)+'</div>';
+    html+='<div class="card-sub">'+safe(role)+' · '+safe(o.zone)+(o.state?' · '+safe(o.state):'')+' &nbsp;<small style="color:var(--text-muted)">'+safe(o.empId)+'</small></div>';
+    html+='<div class="card-metrics">';
+    html+='<div class="card-metric"><div class="card-metric-label">FTD</div><div class="card-metric-val blue">'+fmt(o.ftd,true)+'</div></div>';
+    html+='<div class="card-metric"><div class="card-metric-label">MTD</div><div class="card-metric-val '+mClr+'">'+fmt(o.mtd,true)+'</div></div>';
+    html+='<div class="card-metric"><div class="card-metric-label">LMTD</div><div class="card-metric-val muted">'+fmt(o.lmtd,true)+'</div></div>';
+    html+='<div class="card-metric"><div class="card-metric-label">MoM%</div><div class="card-metric-val '+clr(o.momPct||0)+'">'+fmtPct(o.momPct||0)+'</div></div>';
+    html+='<div class="card-metric"><div class="card-metric-label">Ach%</div><div class="card-metric-val '+achClr+'">'+Math.round(o.achPct||0)+'%</div></div>';
+    html+='<div class="card-metric"><div class="card-metric-label">Max Pot.</div><div class="card-metric-val">'+fmt(o.maxPot,true)+'</div></div>';
+    html+='</div>';
+    html+='<div class="card-footer">';
+    html+='<span style="font-size:0.7rem">Active: <b class="green">'+fmtN(o.active)+'</b> · Inactive: <b class="red">'+fmtN(o.inactive)+'</b> · Connected: <b class="blue">'+fmtN(o.connected)+'</b> · Partners: <b>'+fmtN(o.partners)+'</b></span>';
+    html+='<span style="font-size:0.7rem">📞 '+fmtN(o.calls)+' / 🚶 '+fmtN(o.visits)+'</span>';
+    html+='</div></div>';
+  });
+  el.innerHTML='<div class="cards-grid">'+html+'</div>';
+}
+
+// ── Owner drill-down modal ─────────────────────────────────────
+window.openOwnerDrill=function(empId){
+  var d=state.data; if(!d) return;
+  var owner=null;
+  [d.zhPerf,d.shPerf,d.rhPerf,d.rmPerf,d.amPerf,d.teleRMPerf].forEach(function(arr){
+    if(arr) arr.forEach(function(o){ if(o.empId===empId) owner=o; });
+  });
+  var partners=(d.partners||[]).filter(function(p){ return p.ownerEmpId===empId; });
+  openDrillModal(owner,partners);
+};
+
+function openDrillModal(owner,partners){
+  var el=$('ownerModal'); if(!el) return;
+  var o=owner||{};
+  var mClr=mtdClr(o.mtd,o.lmtd);
+  var html='<div class="modal-kpis">';
+  [{l:'FTD',v:fmt(o.ftd,true),c:'blue'},{l:'MTD',v:fmt(o.mtd,true),c:mClr},
+   {l:'LMTD',v:fmt(o.lmtd,true),c:'muted'},{l:'MoM%',v:fmtPct(o.momPct||0),c:clr(o.momPct||0)},
+   {l:'Ach%',v:Math.round(o.achPct||0)+'%',c:o.achPct>=100?'green':o.achPct>=50?'amber':'red'},
+   {l:'Calls',v:fmtN(o.calls),c:'blue'},{l:'Visits',v:fmtN(o.visits),c:'blue'},
+   {l:'Partners',v:fmtN(o.partners),c:''},{l:'Active',v:fmtN(o.active),c:'green'},
+   {l:'Max Pot.',v:fmt(o.maxPot,true),c:''}
+  ].forEach(function(k){ html+='<div class="modal-kpi"><div class="modal-kpi-label">'+k.l+'</div><div class="modal-kpi-val '+k.c+'">'+k.v+'</div></div>'; });
+  html+='</div>';
+  // Partner list
+  html+='<div class="section-title" style="margin:14px 0 8px">Assigned Partners ('+partners.length+')</div>';
+  html+='<div style="overflow-x:auto"><table><thead><tr>';
+  html+='<th>Partner</th><th>State</th><th>Zone</th><th>FTD</th><th>MTD</th><th>LMTD</th><th>Overall Pot.</th><th>Calls</th><th>Visits</th><th>Status</th><th>Connect</th><th></th>';
+  html+='</tr></thead><tbody>';
+  if(!partners.length){ html+='<tr><td colspan="12" style="text-align:center;padding:20px;color:var(--text-muted)">No partners assigned</td></tr>'; }
+  partners.slice(0,100).forEach(function(p){
+    var mc=mtdClr(p.mtd,p.lmtd);
+    html+='<tr>';
+    html+='<td><div class="partner-name">'+safe(p.name)+'</div><div class="partner-gid">'+safe(p.gid)+'</div></td>';
+    html+='<td class="muted">'+safe(p.state)+'</td>';
+    html+='<td class="muted">'+safe(p.zone)+'</td>';
+    html+='<td class="blue">'+fmt(p.ftd,true)+'</td>';
+    html+='<td class="'+mc+'">'+fmt(p.mtd,true)+'</td>';
+    html+='<td class="muted">'+fmt(p.lmtd,true)+'</td>';
+    html+='<td>'+fmt(p.overallPot,true)+'</td>';
+    html+='<td>'+fmtN(p.calls)+'</td>';
+    html+='<td>'+fmtN(p.visits)+'</td>';
+    html+='<td><span class="card-badge '+(p.active?'badge-green':'badge-gray')+'">'+(p.active?'Active':'Inactive')+'</span></td>';
+    html+='<td><span class="card-badge '+(p.connected?'badge-blue':'badge-gray')+'">'+(p.connected?'Connected':'Not')+'</span></td>';
+    html+='<td><button class="btn btn-view" onclick="openPartnerView(\''+safe(p.gid)+'\')">VIEW</button></td>';
+    html+='</tr>';
+  });
+  html+='</tbody></table></div>';
+  $('ownerModalTitle').textContent=(o.name||'Owner')+' — '+(o.role||'')+(o.zone?' · '+o.zone:'');
+  $('ownerModalBody').innerHTML=html;
+  el.classList.add('open');
+}
+
+// ── State Rankings ────────────────────────────────────────────
+function renderStateRank(){
+  var d=state.data; if(!d) return;
+  renderStateTable('stateRankTable',d.stateSummaries||[],false);
+  var teleEl=$('teleStateSection');
+  if(teleEl&&d.teleStateSummaries&&d.teleStateSummaries.length){
+    teleEl.style.display='block';
+    renderStateTable('teleStateRankTable',d.teleStateSummaries,true);
+  }
+}
+
+function renderStateTable(tableId,states){
+  var el=$(tableId); if(!el) return;
+  var sorted=(states||[]).slice().sort(function(a,b){return b.mtd-a.mtd;});
+  var html='';
+  sorted.forEach(function(sm,i){
+    var mClr=mtdClr(sm.mtd,sm.lmtd);
+    var achPct=sm.achPct||0;
+    html+='<tr>';
+    html+='<td style="font-weight:700;color:var(--text-muted)">#'+(i+1)+'</td>';
+    html+='<td class="partner-name">'+safe(sm.state)+'</td>';
+    html+='<td class="muted">'+safe(sm.zone)+'</td>';
+    html+='<td>'+fmtN(sm.partners)+'</td>';
+    html+='<td>'+fmt(sm.maxPot,true)+'</td>';
+    html+='<td>'+fmt(sm.overallPot,true)+'</td>';
+    html+='<td class="'+mClr+'" style="font-weight:700">'+fmt(sm.mtd,true)+'</td>';
+    html+='<td class="muted">'+fmt(sm.lmtd,true)+'</td>';
+    html+='<td class="'+clr(sm.momPct||0)+'">'+fmtPct(sm.momPct||0)+'</td>';
+    html+='<td class="'+(achPct>=100?'green':achPct>=50?'amber':'red')+'">'+achPct.toFixed(0)+'%</td>';
+    html+='<td class="green">'+fmtN(sm.active)+'</td>';
+    html+='<td class="blue">'+fmtN(sm.connected)+'</td>';
+    html+='<td>'+Math.round(sm.engPct||0)+'%</td>';
+    html+='<td>'+fmtN(sm.calls)+'</td>';
+    html+='<td>'+fmtN(sm.visits)+'</td>';
+    html+='<td><button class="btn btn-view" onclick="filterPartnersByState(\''+safe(sm.state)+'\')">Partners</button></td>';
+    html+='</tr>';
+  });
+  el.querySelector('tbody').innerHTML=html||'<tr><td colspan="16" style="text-align:center;padding:24px;color:var(--text-muted)">No data</td></tr>';
+}
+
+// ── Role Performance tab ───────────────────────────────────────
+function renderRolePerf(){
+  var d=state.data; if(!d) return;
+  renderOwnerCards('zhCardsRolePerf',d.zhPerf,'ZH',false);
+  var shrh=(d.shPerf||[]).concat(d.rhPerf||[]).sort(function(a,b){return b.mtd-a.mtd;});
+  renderOwnerCards('shrhCardsRolePerf',shrh,'SH/RH',false);
+  renderOwnerCards('amCardsRolePerf',d.amPerf,'AM',false);
+}
+
+// ── My Partners tab ────────────────────────────────────────────
+function renderMyPartners(){
+  var d=state.data; if(!d) return;
+  var partners=(d.partners||[]).filter(function(p){ return !p.isTele; });
+  var search=($('myPartnerSearch')||{}).value||'';
+  var sf=($('myPartnerStatus')||{}).value||'';
+  var filtered=partners.filter(function(p){
+    if(search&&!(p.name||'').toLowerCase().includes(search.toLowerCase())&&!(p.gid||'').toLowerCase().includes(search.toLowerCase())) return false;
+    if(sf==='active'&&!p.active) return false;
+    if(sf==='inactive'&&p.active) return false;
+    if(sf==='connected'&&!p.connected) return false;
+    if(sf==='notconnected'&&p.connected) return false;
+    return true;
+  });
+  var cnt=$('myPartnersCount'); if(cnt) cnt.textContent=filtered.length+' partners';
+  renderPartnerRows('myPartnersTable',filtered);
+}
+
+function renderPartnerRows(tableId,list){
+  var el=$(tableId); if(!el) return;
+  var html='';
+  list.slice(0,300).forEach(function(p){
+    var mc=mtdClr(p.mtd,p.lmtd);
+    html+='<tr>';
+    html+='<td><div class="partner-name">'+safe(p.name)+'</div><div class="partner-gid">'+safe(p.gid)+(p.isTele?' <span class="tele-badge">TELE</span>':'')+'</div></td>';
+    html+='<td class="muted">'+safe(p.city)+'</td>';
+    html+='<td class="muted">'+safe(p.state)+'</td>';
+    html+='<td class="muted">'+safe(p.zone)+'</td>';
+    html+='<td class="muted">'+safe(p.ownerName)+'</td>';
+    html+='<td class="blue">'+fmt(p.ftd,true)+'</td>';
+    html+='<td class="'+mc+'" style="font-weight:700">'+fmt(p.mtd,true)+'</td>';
+    html+='<td class="muted">'+fmt(p.lmtd,true)+'</td>';
+    html+='<td>'+fmt(p.overallPot,true)+'</td>';
+    html+='<td>'+fmt(p.projection,true)+'</td>';
+    html+='<td>'+fmtN(p.calls)+'</td>';
+    html+='<td>'+fmtN(p.visits)+'</td>';
+    html+='<td>'+fmtN(p.monthsActive)+'</td>';
+    html+='<td>'+fmt(p.avgMonthly,true)+'</td>';
+    html+='<td><span class="card-badge '+(p.active?'badge-green':'badge-gray')+'">'+(p.active?'Active':'Inactive')+'</span></td>';
+    html+='<td><span class="card-badge '+(p.connected?'badge-blue':'badge-gray')+'">'+(p.connected?'Connected':'Not')+'</span></td>';
+    html+='<td><button class="btn btn-view" onclick="openPartnerView(\''+safe(p.gid)+'\')">VIEW</button></td>';
+    html+='</tr>';
+  });
+  el.querySelector('tbody').innerHTML=html||'<tr><td colspan="17" style="text-align:center;padding:24px;color:var(--text-muted)">No partners found</td></tr>';
+}
+
+// ── Tele-RM tab ────────────────────────────────────────────────
+function renderTeleRM(){
+  var d=state.data; if(!d) return;
+  var teleSum=d.teleRMSummary;
+
+  // KPI strip
+  var kpiEl=$('teleKpiStrip');
+  if(kpiEl&&teleSum){
+    var mClr=mtdClr(teleSum.mtd,teleSum.lmtd);
+    kpiEl.innerHTML='<div class="tele-summary-card">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between">'
+      +'<div><div class="tele-section-title">📞 Tele-RM Channel Summary</div>'
+      +'<div class="tele-section-sub">'+fmtN(teleSum.partners)+' total partners · Separate from field zones</div></div>'
+      +'<div style="text-align:right"><div style="font-size:1.4rem;font-weight:800;color:var(--blue)">'+fmt(teleSum.mtd,true)+'</div><div style="font-size:0.7rem;color:#3b82f6">MTD ('+mClr+')</div></div>'
+      +'</div>'
+      +'<div class="tele-summary-grid">'
+      +'<div class="tele-kpi-box"><div class="tele-kpi-label">FTD</div><div class="tele-kpi-val">'+fmt(teleSum.ftd,true)+'</div></div>'
+      +'<div class="tele-kpi-box"><div class="tele-kpi-label">MTD</div><div class="tele-kpi-val '+mClr+'">'+fmt(teleSum.mtd,true)+'</div></div>'
+      +'<div class="tele-kpi-box"><div class="tele-kpi-label">LMTD</div><div class="tele-kpi-val">'+fmt(teleSum.lmtd,true)+'</div></div>'
+      +'<div class="tele-kpi-box"><div class="tele-kpi-label">Max Pot.</div><div class="tele-kpi-val">'+fmt(teleSum.maxPot,true)+'</div></div>'
+      +'<div class="tele-kpi-box"><div class="tele-kpi-label">Overall Pot.</div><div class="tele-kpi-val">'+fmt(teleSum.overallPot,true)+'</div></div>'
+      +'<div class="tele-kpi-box"><div class="tele-kpi-label">Calls</div><div class="tele-kpi-val">'+fmtN(teleSum.calls)+'</div></div>'
+      +'<div class="tele-kpi-box"><div class="tele-kpi-label">Visits</div><div class="tele-kpi-val">'+fmtN(teleSum.visits)+'</div></div>'
+      +'<div class="tele-kpi-box"><div class="tele-kpi-label">Active</div><div class="tele-kpi-val green">'+fmtN(teleSum.active)+'</div></div>'
+      +'<div class="tele-kpi-box"><div class="tele-kpi-label">Connected</div><div class="tele-kpi-val blue">'+fmtN(teleSum.connected)+'</div></div>'
+      +'<div class="tele-kpi-box"><div class="tele-kpi-label">MoM%</div><div class="tele-kpi-val '+clr(teleSum.momPct||0)+'">'+fmtPct(teleSum.momPct||0)+'</div></div>'
+      +'</div></div>';
+  } else if(kpiEl){
+    kpiEl.innerHTML='<div class="alert alert-info">No Tele-RM data in your scope.</div>';
+  }
+
+  // Owner cards
+  renderOwnerCards('teleRMCards',d.teleRMPerf,'RM',true);
+
+  // State table
+  var tstates=d.teleStateSummaries||[];
+  var tel=$('teleStateTable'); if(tel){
+    var html='';
+    tstates.sort(function(a,b){return b.mtd-a.mtd;}).forEach(function(sm,i){
+      var mc=mtdClr(sm.mtd,sm.lmtd);
+      html+='<tr><td style="font-weight:700;color:var(--text-muted)">#'+(i+1)+'</td>';
+      html+='<td class="partner-name">'+safe(sm.state)+'</td>';
+      html+='<td>'+fmtN(sm.partners)+'</td>';
+      html+='<td>'+fmt(sm.maxPot,true)+'</td>';
+      html+='<td>'+fmt(sm.overallPot,true)+'</td>';
+      html+='<td class="'+mc+'" style="font-weight:700">'+fmt(sm.mtd,true)+'</td>';
+      html+='<td class="muted">'+fmt(sm.lmtd,true)+'</td>';
+      html+='<td class="'+clr(sm.momPct||0)+'">'+fmtPct(sm.momPct||0)+'</td>';
+      html+='<td>'+Math.round(sm.achPct||0)+'%</td>';
+      html+='<td class="green">'+fmtN(sm.active)+'</td>';
+      html+='<td class="blue">'+fmtN(sm.connected)+'</td>';
+      html+='<td>'+fmtN(sm.calls)+'</td>';
+      html+='<td>'+fmtN(sm.visits)+'</td></tr>';
+    });
+    tel.querySelector('tbody').innerHTML=html||'<tr><td colspan="13" style="text-align:center;padding:20px;color:var(--text-muted)">No Tele-RM state data</td></tr>';
+  }
+
+  // Partner list
+  renderTelePartners();
+}
+
+function renderTelePartners(){
+  var d=state.data; if(!d) return;
+  var partners=(d.partners||[]).filter(function(p){return p.isTele;});
+  var search=state.teleSearch.toLowerCase();
+  var sf=state.teleStatus;
+  var filtered=partners.filter(function(p){
+    if(search&&!(p.name||'').toLowerCase().includes(search)&&!(p.gid||'').toLowerCase().includes(search)) return false;
+    if(sf==='active'&&!p.active) return false;
+    if(sf==='inactive'&&p.active) return false;
+    if(sf==='connected'&&!p.connected) return false;
+    if(sf==='notconnected'&&p.connected) return false;
+    return true;
+  });
+  var cnt=$('telePartnerCount'); if(cnt) cnt.textContent=filtered.length+' Tele-RM partners';
+  var el=$('telePartnerTable'); if(!el) return;
+  var html='';
+  filtered.slice(0,300).forEach(function(p){
+    var mc=mtdClr(p.mtd,p.lmtd);
+    html+='<tr>';
+    html+='<td><div class="partner-name">'+safe(p.name)+'</div><div class="partner-gid">'+safe(p.gid)+'</div></td>';
+    html+='<td class="muted">'+safe(p.city)+'</td>';
+    html+='<td class="muted">'+safe(p.state)+'</td>';
+    html+='<td class="muted">'+safe(p.ownerName)+'</td>';
+    html+='<td class="blue">'+fmt(p.ftd,true)+'</td>';
+    html+='<td class="'+mc+'" style="font-weight:700">'+fmt(p.mtd,true)+'</td>';
+    html+='<td class="muted">'+fmt(p.lmtd,true)+'</td>';
+    html+='<td>'+fmt(p.overallPot,true)+'</td>';
+    html+='<td>'+fmt(p.projection,true)+'</td>';
+    html+='<td>'+fmtN(p.calls)+'</td>';
+    html+='<td>'+fmtN(p.visits)+'</td>';
+    html+='<td><span class="card-badge '+(p.active?'badge-green':'badge-gray')+'">'+(p.active?'Active':'Inactive')+'</span></td>';
+    html+='<td><span class="card-badge '+(p.connected?'badge-blue':'badge-gray')+'">'+(p.connected?'Connected':'Not')+'</span></td>';
+    html+='<td><button class="btn btn-view" onclick="openPartnerView(\''+safe(p.gid)+'\')">VIEW</button></td>';
+    html+='</tr>';
+  });
+  el.querySelector('tbody').innerHTML=html||'<tr><td colspan="14" style="text-align:center;padding:20px;color:var(--text-muted)">No Tele-RM partners found</td></tr>';
+}
+
+// ── Cities tab ────────────────────────────────────────────────
+function renderCities(){
+  var d=state.data; if(!d||!d.geoAnalytics) return;
+  renderCityTable('topCitiesTable',d.geoAnalytics.top10||[],true);
+  renderCityTable('worstCitiesTable',d.geoAnalytics.worst10||[],false);
+}
+
+function renderCityTable(tableId,cities,isTop){
+  var el=$(tableId); if(!el) return;
+  var html='';
+  cities.forEach(function(c,i){
+    var mc=mtdClr(c.mtd,c.lmtd);
+    var pct=c.potAchPct||0;
+    var barW=Math.min(pct,400); // cap bar at 400%
+    var barClr=pct>=100?'':'red';
+    html+='<tr>';
+    html+='<td style="font-weight:700;color:'+(isTop?'var(--green)':'var(--red)')+'">'+( isTop?'▲ ':'▼ ')+'#'+(i+1)+'</td>';
+    html+='<td class="partner-name">'+safe(c.city)+'</td>';
+    html+='<td class="muted">'+safe(c.state)+'</td>';
+    html+='<td class="muted">'+safe(c.zone)+'</td>';
+    html+='<td>'+fmtN(c.partners)+'</td>';
+    html+='<td>'+fmt(c.overallPot,true)+'</td>';
+    html+='<td class="'+mc+'" style="font-weight:700">'+fmt(c.mtd,true)+'</td>';
+    html+='<td class="muted">'+fmt(c.lmtd,true)+'</td>';
+    html+='<td><div class="progress-wrap"><div class="progress-bar-bg"><div class="progress-bar-fill '+barClr+'" style="width:'+Math.min(barW/4,100)+'%"></div></div><b style="white-space:nowrap">'+pct.toFixed(0)+'%</b></div></td>';
+    html+='<td class="green">'+fmtN(c.active)+'</td>';
+    html+='<td>'+fmtN(c.calls)+'</td>';
+    html+='<td>'+fmtN(c.visits)+'</td>';
+    html+='<td><button class="btn btn-view" onclick="openCityPartners(\''+safe(c.city)+'\',\''+safe(c.state)+'\')">Partners</button></td>';
+    html+='</tr>';
+  });
+  el.querySelector('tbody').innerHTML=html||'<tr><td colspan="13" style="text-align:center;padding:20px;color:var(--text-muted)">No data</td></tr>';
+}
+
+window.openCityPartners=function(city,stateName){
+  var d=state.data; if(!d) return;
+  var plist=(d.partners||[]).filter(function(p){ return p.city===city&&p.state===stateName; });
+  var el=$('cityPartnerSection'); if(!el) return;
+  el.style.display='block';
+  var ttl=$('cityPartnerTitle'); if(ttl) ttl.textContent='Partners in '+city+', '+stateName+' ('+plist.length+')';
+  var tbl=$('cityPartnerTable'); if(!tbl) return;
+  var html='';
+  plist.forEach(function(p){
+    var mc=mtdClr(p.mtd,p.lmtd);
+    html+='<tr>';
+    html+='<td><div class="partner-name">'+safe(p.name)+'</div><div class="partner-gid">'+safe(p.gid)+'</div></td>';
+    html+='<td class="muted">'+safe(p.state)+'</td>';
+    html+='<td class="muted">'+safe(p.zone)+'</td>';
+    html+='<td class="muted">'+safe(p.ownerName)+'</td>';
+    html+='<td class="blue">'+fmt(p.ftd,true)+'</td>';
+    html+='<td class="'+mc+'" style="font-weight:700">'+fmt(p.mtd,true)+'</td>';
+    html+='<td class="muted">'+fmt(p.lmtd,true)+'</td>';
+    html+='<td>'+fmt(p.overallPot,true)+'</td>';
+    html+='<td>'+fmtN(p.calls)+'</td>';
+    html+='<td>'+fmtN(p.visits)+'</td>';
+    html+='<td><span class="card-badge '+(p.active?'badge-green':'badge-gray')+'">'+(p.active?'Active':'Inactive')+'</span></td>';
+    html+='<td><button class="btn btn-view" onclick="openPartnerView(\''+safe(p.gid)+'\')">VIEW</button></td>';
+    html+='</tr>';
+  });
+  tbl.querySelector('tbody').innerHTML=html||'<tr><td colspan="12" style="text-align:center;padding:20px;color:var(--text-muted)">No partners in '+city+'</td></tr>';
+  el.scrollIntoView({behavior:'smooth',block:'start'});
+};
+
+// ── Login Activity tab ─────────────────────────────────────────
+function renderLoginActivity(){
+  var el=$('loginTableBody'); if(el) el.innerHTML='<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted)">Loading…</td></tr>';
+  apiFetch({action:'getLoginStats'},function(err,data){
+    if(err||!data||!data.success){
+      if(el) el.innerHTML='<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--red)">Could not load login data. Ensure Login_Tracker sheet exists.</td></tr>';
+      return;
+    }
+    window._loginLogs=data.logs||[];
+    window._loginByUser=data.byUser||[];
+    var lt=$('loginTotal'), lu=$('loginUnique');
+    if(lt) lt.textContent=data.totalLogins||0;
+    if(lu) lu.textContent=data.uniqueUsers||0;
+    renderLoginByUser(data.byUser||[]);
+    renderLoginTable(data.logs||[]);
+  });
+}
+
+function renderLoginByUser(users){
+  var el=$('loginByUserTable'); if(!el) return;
+  var search=(($('loginSearch')||{}).value||'').toLowerCase();
+  var zf=($('loginZoneFilter')||{}).value||'';
+  var filtered=users.filter(function(u){
+    if(search&&!(u.name||'').toLowerCase().includes(search)&&!(u.uid||'').toLowerCase().includes(search)) return false;
+    if(zf&&u.zone!==zf) return false;
+    return true;
+  });
+  var html='';
+  filtered.forEach(function(u){
+    var dt=u.lastLogin?new Date(u.lastLogin).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}):'—';
+    html+='<tr><td class="partner-name">'+safe(u.name||'—')+'</td><td class="muted">'+safe(u.uid)+'</td>';
+    html+='<td><span class="card-badge badge-blue">'+safe(u.role||'—')+'</span></td>';
+    html+='<td class="muted">'+safe(u.zone||'—')+'</td>';
+    html+='<td style="font-weight:700;color:var(--red)">'+fmtN(u.count)+'</td>';
+    html+='<td class="muted">'+dt+'</td></tr>';
+  });
+  el.querySelector('tbody').innerHTML=html||'<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-muted)">No login records yet</td></tr>';
+}
+
+function renderLoginTable(logs){
+  var el=$('loginTableBody'); if(!el) return;
+  var search=(($('loginSearch')||{}).value||'').toLowerCase();
+  var zf=($('loginZoneFilter')||{}).value||'';
+  var df=($('loginDateFilter')||{}).value||'';
+  var filtered=logs.filter(function(l){
+    if(search&&!(l.name||'').toLowerCase().includes(search)&&!(l.uid||'').toLowerCase().includes(search)) return false;
+    if(zf&&l.zone!==zf) return false;
+    if(df&&!l.ts.startsWith(df)) return false;
+    return true;
+  });
+  var html='';
+  filtered.slice(0,200).forEach(function(l){
+    var dt=l.ts?new Date(l.ts).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}):'—';
+    html+='<tr><td class="partner-name">'+safe(l.name||'—')+'</td><td class="muted">'+safe(l.uid)+'</td>';
+    html+='<td><span class="card-badge badge-blue">'+safe(l.role||'—')+'</span></td>';
+    html+='<td class="muted">'+safe(l.zone||'—')+'</td><td class="muted">'+dt+'</td></tr>';
+  });
+  el.innerHTML=html||'<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted)">No login records</td></tr>';
+}
+
+// ── Partner VIEW modal ─────────────────────────────────────────
+window.openPartnerView=function(gid){
+  var d=state.data; if(!d) return;
+  var p=(d.partners||[]).find(function(x){return x.gid===gid;});
+  if(!p){ showError('Partner not found: '+gid); return; }
+  var el=$('partnerModal'); if(!el) return;
+  $('partnerModalTitle').textContent=safe(p.name)+' · '+safe(p.gid);
+  var mc=mtdClr(p.mtd,p.lmtd);
+  var html='<div class="modal-kpis">';
+  [{l:'FTD',v:fmt(p.ftd,true),c:'blue'},{l:'MTD',v:fmt(p.mtd,true),c:mc},
+   {l:'LMTD',v:fmt(p.lmtd,true),c:'muted'},{l:'Overall Pot.',v:fmt(p.overallPot,true),c:''},
+   {l:'Projection',v:fmt(p.projection,true),c:''},{l:'Calls',v:fmtN(p.calls),c:'blue'},
+   {l:'Visits',v:fmtN(p.visits),c:'blue'},{l:'Months Active',v:fmtN(p.monthsActive),c:''},
+   {l:'Avg Monthly',v:fmt(p.avgMonthly,true),c:''},{l:'Max Pot.',v:fmt(p.bizPot,true),c:''}
+  ].forEach(function(k){ html+='<div class="modal-kpi"><div class="modal-kpi-label">'+k.l+'</div><div class="modal-kpi-val '+k.c+'">'+k.v+'</div></div>'; });
+  html+='</div>';
+  html+='<div style="background:var(--bg);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:0.78rem;line-height:1.8">';
+  html+='<b>State:</b> '+safe(p.state)+' &nbsp;·&nbsp; <b>City:</b> '+safe(p.city)+' &nbsp;·&nbsp; <b>Zone:</b> '+safe(p.zone)+'<br>';
+  html+='<b>Owner:</b> '+safe(p.ownerName)+' ('+safe(p.ownerRole)+') &nbsp;·&nbsp; <b>Status:</b> '+(p.active?'<span class="green">Active</span>':'<span class="red">Inactive</span>')+' &nbsp;·&nbsp; <b>Connected:</b> '+(p.connected?'<span class="blue">Yes</span>':'<span class="red">No</span>');
+  html+='</div>';
+  if(p.remark){ html+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 12px;font-size:0.75rem;margin-bottom:12px;color:#92400e">💬 '+safe(p.remark)+'</div>'; }
+  html+='<div class="chart-title">📈 14-Month Business Trend</div>';
+  html+='<canvas id="partnerTrendChart" height="160"></canvas>';
+  $('partnerModalBody').innerHTML=html;
+  el.classList.add('open');
+  setTimeout(function(){ renderPartnerTrend(p); },60);
+};
+
+function renderPartnerTrend(p){
+  var canvas=$('partnerTrendChart'); if(!canvas) return;
+  var months=p.months||[];
+  var labels=p.monthLabels||MONTH_LABELS;
+  if(window.partnerTrendChartInst) window.partnerTrendChartInst.destroy();
+  window.partnerTrendChartInst=new Chart(canvas,{
+    type:'bar',
+    data:{
+      labels:labels,
+      datasets:[{
+        label:'Business (₹)',
+        data:months,
+        backgroundColor:months.map(function(v,i){
+          return i===months.length-1?'rgba(216,31,42,0.8)':i===months.length-2?'rgba(37,99,235,0.7)':'rgba(37,99,235,0.4)';
+        }),
+        borderRadius:3, barPercentage:0.6
+      }]
+    },
     options:{
-      cutout:'72%',responsive:true,maintainAspectRatio:false,
-      animation:{animateScale:true,animateRotate:true,duration:600,easing:'easeOutQuart'},
-      plugins:{
-        legend:{position:'bottom',labels:{boxWidth:10,font:{size:11},padding:12,color:'#64748b'}},
-        tooltip:{callbacks:{
-          label:ctx=>`${ctx.label}: ${ctx.raw} (${total?Math.round(ctx.raw/total*100):0}%)`
-        }},
-        // Center text plugin
-        beforeDraw:function(chart){
-          const{width,height,ctx}=chart;
-          ctx.save();
-          const centerX=width/2, centerY=height/2-12;
-          ctx.textAlign='center';ctx.textBaseline='middle';
-          ctx.font=`700 22px Inter,-apple-system,sans-serif`;
-          ctx.fillStyle='#1e293b';
-          ctx.fillText(total.toLocaleString('en-IN'), centerX, centerY);
-          ctx.font=`500 10px Inter,-apple-system,sans-serif`;
-          ctx.fillStyle='#94a3b8';
-          ctx.fillText('TOTAL', centerX, centerY+18);
-          ctx.restore();
-        }
+      responsive:true,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){return '₹'+ctx.parsed.y.toLocaleString('en-IN');}}}},
+      scales:{
+        y:{ticks:{callback:function(v){return v>=100000?'₹'+(v/100000).toFixed(0)+'L':v>=1000?'₹'+(v/1000).toFixed(0)+'K':'₹'+v;}},grid:{color:'#f3f4f6'}},
+        x:{grid:{display:false}}
       }
     }
   });
 }
 
+var MONTH_LABELS=["Apr'25","May'25","Jun'25","Jul'25","Aug'25","Sep'25","Oct'25","Nov'25","Dec'25","Jan'26","Feb'26","Mar'26","Apr'26","May'26"];
+
+// ── Charts ────────────────────────────────────────────────────
 function renderCharts(){
-  const op=state.overallProject;if(!op)return;
-  makeDoughnut('chartActivity',['Active','Inactive'],[op.activePartners,op.inactivePartners],[CHART_COLORS.green,CHART_COLORS.red],'activity');
-  makeDoughnut('chartConnect',['Connected','Not Connected'],[op.connectedPartners,op.nonConnectedPartners],[CHART_COLORS.blue,CHART_COLORS.amber],'connect');
-  makeDoughnut('chartGrowth',['Growth','Degrowth'],[op.growthCount,op.degrowthCount],[CHART_COLORS.green,CHART_COLORS.red],'growth');
+  var d=state.data; if(!d) return;
+  var allOwners=[];
+  [d.zhPerf,d.shPerf,d.rhPerf,d.rmPerf,d.amPerf].forEach(function(arr){if(arr) allOwners=allOwners.concat(arr);});
+
+  // Chart 1: Calls & Visits by top owners
+  (function(){
+    var canvas=$('connectVisitChart'); if(!canvas) return;
+    var top10=allOwners.filter(function(o){return o.calls>0||o.visits>0;}).sort(function(a,b){return (b.calls+b.visits)-(a.calls+a.visits);}).slice(0,10);
+    if(!top10.length) top10=allOwners.slice(0,8);
+    if(window.cvChart) window.cvChart.destroy();
+    window.cvChart=new Chart(canvas,{
+      type:'bar',
+      data:{
+        labels:top10.map(function(o){return o.name.split(' ')[0];}),
+        datasets:[
+          {label:'Calls',data:top10.map(function(o){return o.calls;}),backgroundColor:'rgba(37,99,235,0.75)',borderRadius:4,barPercentage:0.7},
+          {label:'Visits',data:top10.map(function(o){return o.visits;}),backgroundColor:'rgba(22,163,74,0.75)',borderRadius:4,barPercentage:0.7}
+        ]
+      },
+      options:{responsive:true,plugins:{legend:{position:'top'}},scales:{y:{beginAtZero:true,grid:{color:'#f3f4f6'}},x:{grid:{display:false}}}}
+    });
+  })();
+
+  // Chart 2: MTD vs LMTD by AM (top 8)
+  (function(){
+    var canvas=$('mtdByOwnerChart'); if(!canvas) return;
+    var top8=(d.amPerf||[]).slice(0,8);
+    if(window.mtdChart) window.mtdChart.destroy();
+    window.mtdChart=new Chart(canvas,{
+      type:'bar',
+      data:{
+        labels:top8.map(function(o){return o.name.split(' ')[0];}),
+        datasets:[
+          {label:'MTD',data:top8.map(function(o){return o.mtd;}),backgroundColor:'rgba(216,31,42,0.75)',borderRadius:4,barPercentage:0.7},
+          {label:'LMTD',data:top8.map(function(o){return o.lmtd;}),backgroundColor:'rgba(148,163,184,0.55)',borderRadius:4,barPercentage:0.7}
+        ]
+      },
+      options:{
+        responsive:true,
+        plugins:{legend:{position:'top'},tooltip:{callbacks:{label:function(ctx){return '₹'+(ctx.parsed.y/100000).toFixed(1)+'L';}}}},
+        scales:{y:{beginAtZero:true,ticks:{callback:function(v){return '₹'+(v/100000).toFixed(0)+'L';}},grid:{color:'#f3f4f6'}},x:{grid:{display:false}}}
+      }
+    });
+  })();
+
+  // Chart 3: Partner status donut
+  (function(){
+    var canvas=$('statusDonutChart'); if(!canvas) return;
+    var op=d.overallProject||{};
+    var active=op.activePartners||0, inactive=op.inactivePartners||0;
+    var connected=op.connectedPartners||0;
+    var notConn=(op.totalPartners||0)-connected;
+    if(window.donutChart) window.donutChart.destroy();
+    window.donutChart=new Chart(canvas,{
+      type:'doughnut',
+      data:{
+        labels:['Active','Inactive','Connected','Not Connected'],
+        datasets:[{
+          data:[active,inactive,connected,notConn],
+          backgroundColor:['rgba(22,163,74,0.8)','rgba(216,31,42,0.7)','rgba(37,99,235,0.8)','rgba(148,163,184,0.5)'],
+          borderWidth:2, borderColor:'#fff'
+        }]
+      },
+      options:{responsive:true,plugins:{legend:{position:'bottom'},cutout:'60%'}}
+    });
+  })();
+
+  // Chart 4: Zone MTD vs LMTD
+  (function(){
+    var canvas=$('zoneMtdChart'); if(!canvas) return;
+    var zones=d.zoneSummaries||[];
+    if(window.zoneChart) window.zoneChart.destroy();
+    window.zoneChart=new Chart(canvas,{
+      type:'bar',
+      data:{
+        labels:zones.map(function(z){return z.zone;}),
+        datasets:[
+          {label:'MTD',data:zones.map(function(z){return z.mtd;}),backgroundColor:'rgba(216,31,42,0.75)',borderRadius:4,barPercentage:0.6},
+          {label:'LMTD',data:zones.map(function(z){return z.lmtd;}),backgroundColor:'rgba(148,163,184,0.5)',borderRadius:4,barPercentage:0.6}
+        ]
+      },
+      options:{
+        responsive:true,
+        plugins:{legend:{position:'top'},tooltip:{callbacks:{label:function(ctx){return '₹'+(ctx.parsed.y/10000000).toFixed(2)+'Cr';}}}},
+        scales:{y:{beginAtZero:true,ticks:{callback:function(v){return '₹'+(v/10000000).toFixed(1)+'Cr';}},grid:{color:'#f3f4f6'}},x:{grid:{display:false}}}
+      }
+    });
+  })();
 }
 
-// ── KPI Mini Row (MTD next to LMTD) ──
-function renderKpiRow(){const s=state.summary;if(!s)return;$('kpiRow').innerHTML=renderKpis(s);}
+// ── Filter helpers ─────────────────────────────────────────────
+window.filterPartnersByState=function(stateName){
+  state.activeTab='myPartners';
+  renderTab('myPartners');
+};
+window.closeOwnerModal  =function(){ var el=$('ownerModal');  if(el) el.classList.remove('open'); };
+window.closePartnerModal=function(){ var el=$('partnerModal'); if(el) el.classList.remove('open'); };
 
-function renderKpis(s){
-  const mom=s.momPct;
-  return `
-  <div class="kpi-mini"><span class="kpi-mini-icon">👥</span><div><div class="kpi-mini-label">Partners</div><div class="kpi-mini-val">${fmtInt(s.totalPartners)}</div></div></div>
-  <div class="kpi-mini"><span class="kpi-mini-icon">📈</span><div><div class="kpi-mini-label">Max Potential</div><div class="kpi-mini-val">${fmtINR(s.totalMaxPotential)}</div></div></div>
-  <div class="kpi-mini"><span class="kpi-mini-icon">🏦</span><div><div class="kpi-mini-label">Overall Potential</div><div class="kpi-mini-val">${fmtINR(s.totalOverallPotential)}</div></div></div>
-  <div class="kpi-mini"><span class="kpi-mini-icon">🎯</span><div><div class="kpi-mini-label">Target (May)</div><div class="kpi-mini-val">${fmtINR(s.totalTarget)}</div></div></div>
-  <div class="kpi-mini"><span class="kpi-mini-icon">📅</span><div><div class="kpi-mini-label">MTD (May'26)</div><div class="kpi-mini-val pos">${fmtINR(s.currentMonthPremium)}</div><div class="kpi-mini-foot ${mom>=0?'pos':'neg'}">${mom>=0?'▲ +':'▼ '}${Math.abs(mom)}% MoM</div></div></div>
-  <div class="kpi-mini"><span class="kpi-mini-icon">📆</span><div><div class="kpi-mini-label">LMTD (Apr'26)</div><div class="kpi-mini-val">${fmtINR(s.prevMonthPremium)}</div><div class="kpi-mini-foot">Last month</div></div></div>
-  <div class="kpi-mini"><span class="kpi-mini-icon">🏆</span><div><div class="kpi-mini-label">Achievement</div><div class="kpi-mini-val ${s.achievementPct>=80?'pos':s.achievementPct>=40?'':'neg'}">${s.achievementPct}%</div></div></div>
-  <div class="kpi-mini"><span class="kpi-mini-icon">✅</span><div><div class="kpi-mini-label">Active</div><div class="kpi-mini-val pos">${fmtInt(s.activeCount)}</div><div class="kpi-mini-foot neg">Inactive: ${fmtInt(s.inactiveCount)}</div></div></div>
-  <div class="kpi-mini"><span class="kpi-mini-icon">📞</span><div><div class="kpi-mini-label">Connected</div><div class="kpi-mini-val pos">${fmtInt(s.connectedCount)}</div><div class="kpi-mini-foot neg">Not: ${fmtInt(s.notConnectedCount)}</div></div></div>
-  <div class="kpi-mini"><span class="kpi-mini-icon">📱</span><div><div class="kpi-mini-label">Calls / Visits</div><div class="kpi-mini-val pos">${fmtInt(s.totalCalls)} / ${fmtInt(s.totalVisits)}</div></div></div>`;
-}
-
-function populateFilterOptions(){
-  const{states,cities,owners}=state.filterOptions;
-  fill($('fState'),states,'All states');fill($('fCity'),cities,'All cities');
-  fill($('fOwner'),owners,'All owners');fill($('fStateMine'),states,'All states');
-  fill($('fTeamState'),states,'All states');fill($('fAmState'),states,'All states');
-}
-function fill(sel,arr,ph){if(!sel)return;const cur=sel.value;sel.innerHTML=`<option value="">${ph}</option>`+(arr||[]).map(v=>`<option value="${safe(v)}">${safe(v)}</option>`).join('');sel.value=cur;}
-
-// ── All Partners ──
-function getFiltered(){
-  const q=$('fSearch').value.trim().toLowerCase(),st=$('fState').value,ct=$('fCity').value;
-  const ow=$('fOwner').value,orole=$('fOwnerRole').value,ac=$('fActive').value;
-  const gw=$('fGrowth').value,cn=$('fConnect').value,bz=$('fBusiness').value;
-  return state.partners.filter(p=>{
-    if(q&&(p.name+' '+p.gid+' '+p.city).toLowerCase().indexOf(q)===-1)return false;
-    if(st&&p.state!==st)return false;if(ct&&p.city!==ct)return false;
-    if(ow&&p.ownerName!==ow)return false;if(orole&&p.ownerRole!==orole)return false;
-    if(ac==='active'&&!p.isActive)return false;if(ac==='inactive'&&p.isActive)return false;
-    if(gw==='growth'&&!p.isGrowth)return false;if(gw==='degrowth'&&p.isGrowth)return false;
-    if(cn==='connected'&&!p.connected)return false;if(cn==='notconnected'&&p.connected)return false;
-    if(bz&&!rangeMatch(p.currentMonth,bz))return false;
-    return true;
+// ── Event listeners ────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded',function(){
+  document.querySelectorAll('.nav-tab').forEach(function(tab){
+    tab.addEventListener('click',function(){ renderTab(tab.dataset.tab); });
   });
-}
-function rangeMatch(val,range){if(range==='0')return val===0;const parts=range.split('-');const lo=parts[0]===''?-Infinity:parseFloat(parts[0]);const hi=parts[1]===''||parts[1]===undefined?Infinity:parseFloat(parts[1]);return val>=lo&&val<=hi;}
+  var ms=$('myPartnerSearch');
+  if(ms) ms.addEventListener('input',debounce(function(){renderMyPartners();},300));
+  var mst=$('myPartnerStatus');
+  if(mst) mst.addEventListener('change',function(){renderMyPartners();});
 
-function renderTable(){
-  const list=getFiltered();
-  $('filterCount').textContent=list.length+' of '+state.partners.length+' partners';
-  const tbody=$('partnerTbody');
-  if(!list.length){tbody.innerHTML=`<tr><td colspan="15" class="empty">No partners match filters.</td></tr>`;return;}
-  tbody.innerHTML=list.map(p=>rowHtml(p)).join('');
-  tbody.querySelectorAll('.openModal').forEach(b=>b.addEventListener('click',()=>openModal(b.dataset.gid)));
-}
+  // Tele filters
+  var ts=$('telePartnerSearch'), tst=$('telePartnerStatus');
+  if(ts) ts.addEventListener('input',debounce(function(){state.teleSearch=ts.value;renderTelePartners();},300));
+  if(tst) tst.addEventListener('change',function(){state.teleStatus=tst.value;renderTelePartners();});
 
-function rowHtml(p){
-  const mom=p.prevMonth>0?Math.round((p.currentMonth-p.prevMonth)/p.prevMonth*100):0;
-  return `<tr>
-    <td><div class="partner-name">${safe(p.name)}</div><div class="partner-sub">${safe(p.gid)}</div></td>
-    <td>${safe(p.city)}<div class="partner-sub">${safe(p.state)}</div></td>
-    <td>${safe(p.ownerName)}<div class="partner-sub">${safe(p.ownerRole)}</div></td>
-    <td>${fmtINR(p.maxPotential)}</td><td>${fmtINR(p.overallPotential)}</td><td>${fmtINR(p.target)}</td>
-    <td style="color:#f59e0b;font-weight:700;">${fmtINR(p.ftd||0)}</td><td class="pos"><b>${fmtINR(p.currentMonth)}</b></td><td>${fmtINR(p.prevMonth)}</td>
-    <td class="${mom>=0?'pos':'neg'}">${mom>=0?'+':''}${mom}%</td>
-    <td><span class="${p.isGrowth?'trend-pos':'trend-neg'}">${p.isGrowth?'▲ Growth':'▼ Degrowth'}</span></td>
-    <td>${p.isActive?'<span class="badge badge-green">Active</span>':'<span class="badge badge-red">Inactive</span>'}</td>
-    <td>${p.connected?'<span class="badge badge-blue">Conn.</span>':'<span class="badge badge-amber">Not</span>'}</td>
-    <td class="pos"><b>${fmtInt(p.calls)}</b></td><td class="pos"><b>${fmtInt(p.visits)}</b></td>
-    <td><button class="btn-link openModal" data-gid="${safe(p.gid)}">View</button></td>
-  </tr>`;
-}
+  // Login filters
+  ['loginSearch','loginZoneFilter','loginDateFilter'].forEach(function(id){
+    var el=$(id); if(!el) return;
+    el.addEventListener('change',function(){
+      renderLoginByUser(window._loginByUser||[]);
+      renderLoginTable(window._loginLogs||[]);
+    });
+    el.addEventListener('input',debounce(function(){
+      renderLoginByUser(window._loginByUser||[]);
+      renderLoginTable(window._loginLogs||[]);
+    },300));
+  });
+  var lrb=$('loginRefreshBtn'); if(lrb) lrb.addEventListener('click',renderLoginActivity);
 
-['fSearch','fState','fCity','fOwner','fOwnerRole','fActive','fGrowth','fConnect','fBusiness'].forEach(id=>{
-  const el=$(id);el.addEventListener(el.tagName==='INPUT'?'input':'change',renderTable);
+  // Modal close on backdrop
+  ['ownerModal','partnerModal'].forEach(function(id){
+    var el=$(id); if(!el) return;
+    el.addEventListener('click',function(e){ if(e.target===el) el.classList.remove('open'); });
+  });
+  var logoutBtn=$('logoutBtn'); if(logoutBtn) logoutBtn.addEventListener('click',function(){sessionStorage.clear();window.location.href='index.html';});
+  var refreshBtn=$('refreshBtn'); if(refreshBtn) refreshBtn.addEventListener('click',loadData);
+  loadData();
 });
-$('btnClearFilters').addEventListener('click',()=>{['fSearch','fState','fCity','fOwner','fOwnerRole','fActive','fGrowth','fConnect','fBusiness'].forEach(id=>$(id).value='');renderTable();});
-$('btnExportCsv').addEventListener('click',()=>{
-  const list=getFiltered();
-  const h=['GID','Name','City','State','OwnerRole','OwnerName','MaxPot','OverallPot','Target','MTD','LMTD','MoM%','Active','Growth','Connected','Calls','Visits'];
-  const rows=list.map(p=>[p.gid,p.name,p.city,p.state,p.ownerRole,p.ownerName,p.maxPotential,p.overallPotential,p.target,p.currentMonth,p.prevMonth,pct(p.currentMonth,p.prevMonth),p.isActive?'Active':'Inactive',p.isGrowth?'Growth':'Degrowth',p.connected?'Connected':'Not',p.calls,p.visits]);
-  const csv=[h,...rows].map(r=>r.map(x=>`"${String(x==null?'':x).replace(/"/g,'""')}"`).join(',')).join('\n');
-  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='partners_'+new Date().toISOString().slice(0,10)+'.csv';a.click();
-});
-
-// ── My Partners ──
-function renderMine(){
-  if(user.role==='AM')return;
-  const list=state.myPartners||[];
-  if(!list.length){$('kpiRowMine').innerHTML='<div class="empty">No directly assigned partners.</div>';$('mineTbody').innerHTML='';return;}
-  $('kpiRowMine').innerHTML=renderKpis(computeSummary(list));
-  const q=($('fSearchMine').value||'').toLowerCase(),st=$('fStateMine').value;
-  const ac=$('fActiveMine').value,cn=$('fConnectMine').value;
-  const filtered=list.filter(p=>{
-    if(q&&(p.name+' '+p.gid).toLowerCase().indexOf(q)===-1)return false;
-    if(st&&p.state!==st)return false;
-    if(ac==='active'&&!p.isActive)return false;if(ac==='inactive'&&p.isActive)return false;
-    if(cn==='connected'&&!p.connected)return false;if(cn==='notconnected'&&p.connected)return false;
-    return true;
-  });
-  $('mineTbody').innerHTML=filtered.map(p=>{
-    const mom=p.prevMonth>0?Math.round((p.currentMonth-p.prevMonth)/p.prevMonth*100):0;
-    return `<tr>
-      <td><div class="partner-name">${safe(p.name)}</div><div class="partner-sub">${safe(p.gid)}</div></td>
-      <td>${safe(p.city)}<div class="partner-sub">${safe(p.state)}</div></td>
-      <td>${fmtINR(p.maxPotential)}</td><td>${fmtINR(p.overallPotential)}</td><td>${fmtINR(p.target)}</td>
-      <td style="color:#f59e0b;font-weight:700;">${fmtINR(p.ftd||0)}</td><td class="pos"><b>${fmtINR(p.currentMonth)}</b></td><td>${fmtINR(p.prevMonth)}</td>
-      <td class="${mom>=0?'pos':'neg'}">${mom>=0?'+':''}${mom}%</td>
-      <td><span class="${p.isGrowth?'trend-pos':'trend-neg'}">${p.isGrowth?'▲ Growth':'▼ Degrowth'}</span></td>
-      <td>${p.isActive?'<span class="badge badge-green">Active</span>':'<span class="badge badge-red">Inactive</span>'}</td>
-      <td>${p.connected?'<span class="badge badge-blue">Conn.</span>':'<span class="badge badge-amber">Not</span>'}</td>
-      <td class="pos"><b>${fmtInt(p.calls)}</b></td><td class="pos"><b>${fmtInt(p.visits)}</b></td>
-      <td><button class="btn-link openModal" data-gid="${safe(p.gid)}">View</button></td>
-    </tr>`;
-  }).join('');
-  $('mineTbody').querySelectorAll('.openModal').forEach(b=>b.addEventListener('click',()=>openModal(b.dataset.gid)));
-}
-['fSearchMine','fStateMine','fActiveMine','fConnectMine'].forEach(id=>{const el=$(id);if(!el)return;el.addEventListener(el.tagName==='INPUT'?'input':'change',renderMine);});
-if($('btnClearMine'))$('btnClearMine').addEventListener('click',()=>{['fSearchMine','fStateMine','fActiveMine','fConnectMine'].forEach(id=>$(id).value='');renderMine();});
-
-function computeSummary(list){
-  let curr=0,prev=0,mp=0,op=0,tg=0,ac=0,gw=0,cn=0,cl=0,vs=0;
-  list.forEach(p=>{curr+=p.currentMonth;prev+=p.prevMonth;mp+=p.maxPotential;op+=p.overallPotential;tg+=p.target;if(p.isActive)ac++;if(p.isGrowth)gw++;if(p.connected)cn++;cl+=p.calls;vs+=p.visits;});
-  return{totalPartners:list.length,totalMaxPotential:mp,totalOverallPotential:op,totalTarget:tg,currentMonthPremium:curr,prevMonthPremium:prev,activeCount:ac,inactiveCount:list.length-ac,growthCount:gw,degrowthCount:list.length-gw,connectedCount:cn,notConnectedCount:list.length-cn,totalCalls:cl,totalVisits:vs,achievementPct:tg>0?Math.round(curr/tg*100):0,momPct:prev>0?Math.round((curr-prev)/prev*100):0,maxPotAchPct:mp>0?Math.round(curr/mp*100):0};
-}
-
-// ── AM Performance ──
-function renderAm(){
-  if(user.role==='AM')return;
-  let list=state.amPerf.slice();
-  const q=($('fAmSearch').value||'').toLowerCase(),st=$('fAmState').value,sort=$('fAmSort').value||'mtd',status=$('fAmStatus').value;
-  if(q)list=list.filter(a=>a.name.toLowerCase().indexOf(q)!==-1);
-  if(st)list=list.filter(a=>a.states.indexOf(st)!==-1);
-  if(status==='active')list=list.filter(a=>a.overallProject.activePartners>0);
-  if(status==='inactive')list=list.filter(a=>a.overallProject.inactivePartners>0);
-  list.sort((a,b)=>{
-    if(sort==='mtd')return b.overallProject.businessGenerated-a.overallProject.businessGenerated;
-    if(sort==='ach')return b.overallProject.achievementPct-a.overallProject.achievementPct;
-    if(sort==='partners')return b.overallProject.totalPartners-a.overallProject.totalPartners;
-    if(sort==='active')return b.overallProject.activePartners-a.overallProject.activePartners;
-    return a.name.localeCompare(b.name);
-  });
-  if(!list.length){$('amGrid').innerHTML='<div class="empty">No AMs match.</div>';return;}
-  $('amGrid').innerHTML=list.map(a=>{
-    const op=a.overallProject,mom=op.momPct;
-    return `<div class="am-card">
-      <div class="am-card-head">
-        <div><div class="am-name">${safe(a.name)}</div><div class="am-role">${fmtInt(op.totalPartners)} partners • ${a.states.slice(0,2).join(', ')}${a.states.length>2?' +'+(a.states.length-2):''}</div></div>
-        <button class="btn-sm openAmDrill" data-name="${safe(a.name)}">Details</button>
-      </div>
-      <div class="am-stats">
-        <div class="as" style="background:linear-gradient(135deg,#0f172a,#1e3a5f);"><div class="as-l" style="color:rgba(255,255,255,.5);">FTD</div><div class="as-v" style="color:#fbbf24;">${fmtINR(op.ftd||a.summary.totalFTD||0)}</div></div>
-        <div class="as"><div class="as-l">MTD</div><div class="as-v pos">${fmtINR(op.businessGenerated)}</div></div>
-        <div class="as" style="background:#0f172a;"><div class="as-l" style="color:rgba(255,255,255,.5);">FTD</div><div class="as-v" style="color:#fbbf24;">${fmtINR(op.ftd||0)}</div></div>
-        <div class="as"><div class="as-l">LMTD</div><div class="as-v">${fmtINR(op.lmtd||a.summary.prevMonthPremium)}</div></div>
-        <div class="as"><div class="as-l">MoM</div><div class="as-v ${mom>=0?'pos':'neg'}">${mom>=0?'+':''}${mom}%</div></div>
-        <div class="as"><div class="as-l">Ach.</div><div class="as-v ${op.achievementPct>=80?'pos':op.achievementPct>=40?'':'neg'}">${op.achievementPct}%</div></div>
-        <div class="as"><div class="as-l">Active</div><div class="as-v pos">${fmtInt(op.activePartners)}</div></div>
-        <div class="as"><div class="as-l">Inactive</div><div class="as-v neg">${fmtInt(op.inactivePartners)}</div></div>
-        <div class="as"><div class="as-l">Connected</div><div class="as-v pos">${fmtInt(op.connectedPartners)}</div></div>
-        <div class="as"><div class="as-l">Calls</div><div class="as-v pos">${fmtInt(op.calls)}</div></div>
-        <div class="as"><div class="as-l">Visits</div><div class="as-v pos">${fmtInt(op.visits)}</div></div>
-        <div class="as"><div class="as-l">Max Pot.</div><div class="as-v">${fmtINR(op.maxPotential)}</div></div>
-      </div>
-    </div>`;
-  }).join('');
-  $('amGrid').querySelectorAll('.openAmDrill').forEach(b=>b.addEventListener('click',()=>openAmDrill(b.dataset.name)));
-}
-['fAmSearch','fAmState','fAmSort','fAmStatus'].forEach(id=>{const el=$(id);if(!el)return;el.addEventListener(el.tagName==='INPUT'?'input':'change',renderAm);});
-
-function openAmDrill(amName){
-  const am=state.amPerf.find(a=>a.name===amName);if(!am)return;
-  const op=am.overallProject;
-  const rows=am.partners.map(p=>{
-    const mom=p.prevMonth>0?Math.round((p.currentMonth-p.prevMonth)/p.prevMonth*100):0;
-    return `<tr><td><div class="partner-name">${safe(p.name)}</div><div class="partner-sub">${safe(p.gid)}</div></td><td>${safe(p.city)}<div class="partner-sub">${safe(p.state)}</div></td><td>${fmtINR(p.maxPotential)}</td><td>${fmtINR(p.overallPotential)}</td><td>${fmtINR(p.target)}</td><td class="pos"><b>${fmtINR(p.currentMonth)}</b></td><td>${fmtINR(p.prevMonth)}</td><td class="${mom>=0?'pos':'neg'}">${mom>=0?'+':''}${mom}%</td><td><span class="${p.isGrowth?'trend-pos':'trend-neg'}">${p.isGrowth?'▲ Growth':'▼ Degrowth'}</span></td><td>${p.isActive?'<span class="badge badge-green">Active</span>':'<span class="badge badge-red">Inactive</span>'}</td><td>${p.connected?'<span class="badge badge-blue">Conn.</span>':'<span class="badge badge-amber">Not</span>'}</td><td class="pos">${fmtInt(p.calls)}</td><td class="pos">${fmtInt(p.visits)}</td><td><button class="btn-link openModal" data-gid="${safe(p.gid)}">View</button></td></tr>`;
-  }).join('');
-  $('modalBody').innerHTML=`<h2>${safe(am.name)} <span class="role-chip">AM</span></h2><div class="modal-sub">${am.states.join(', ')}</div>
-  <div class="kpi-row">
-    <div class="kpi-mini"><div><div class="kpi-mini-label">Partners</div><div class="kpi-mini-val">${fmtInt(op.totalPartners)}</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">MTD</div><div class="kpi-mini-val pos"><b>${fmtINR(op.businessGenerated)}</b></div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">LMTD</div><div class="kpi-mini-val">${fmtINR(op.lmtd||am.summary.prevMonthPremium)}</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">Target</div><div class="kpi-mini-val">${fmtINR(op.target)}</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">Ach.</div><div class="kpi-mini-val">${op.achievementPct}%</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">Max Pot.</div><div class="kpi-mini-val">${fmtINR(op.maxPotential)}</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">Active</div><div class="kpi-mini-val pos">${fmtInt(op.activePartners)}</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">Connected</div><div class="kpi-mini-val pos">${fmtInt(op.connectedPartners)}</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">Calls / Visits</div><div class="kpi-mini-val pos">${fmtInt(op.calls)} / ${fmtInt(op.visits)}</div></div></div>
-  </div>
-  <div class="table-wrap"><table class="ptable"><thead><tr><th>Partner</th><th>City/State</th><th>Max Pot.</th><th>Overall Pot.</th><th>Target</th><th>MTD</th><th>LMTD</th><th>MoM%</th><th>Growth</th><th>Status</th><th>Connect</th><th>Calls</th><th>Visits</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-  $('partnerModal').classList.remove('hidden');
-  $('modalBody').querySelectorAll('.openModal').forEach(b=>b.addEventListener('click',()=>openModal(b.dataset.gid)));
-}
-
-// ── Team Performance ──
-function renderTeam(){
-  if(user.role==='AM')return;
-  let team=state.team||[];
-  const roleF=$('fTeamRole').value,search=($('fTeamSearch').value||'').toLowerCase(),stateF=$('fTeamState').value;
-  if(roleF)team=team.filter(t=>t.role===roleF);
-  if(search)team=team.filter(t=>t.name.toLowerCase().indexOf(search)!==-1);
-  if(stateF)team=team.filter(t=>t.partners.some(p=>p.state===stateF));
-  if(!team.length){$('teamGrid').innerHTML='<div class="empty">No team members match.</div>';return;}
-  $('teamGrid').innerHTML=team.map(t=>{
-    const op=t.overallProject,mom=op.momPct;
-    return `<div class="team-card">
-      <div class="team-card-head"><div><div class="team-name">${safe(t.name)}</div><div class="team-role">${safe(t.role)} • ${fmtInt(op.totalPartners)} partners</div></div><button class="btn-link openTeamMember" data-key="${safe(t.role+'|'+t.name)}">Details</button></div>
-      <div class="team-stats">
-        <div class="ts" style="background:linear-gradient(135deg,#0f172a,#1e3a5f);"><div class="ts-l" style="color:rgba(255,255,255,.5);">FTD</div><div class="ts-v" style="color:#fbbf24;">${fmtINR(op.ftd||t.summary.totalFTD||0)}</div></div>
-        <div class="ts"><div class="ts-l">MTD</div><div class="ts-v pos"><b>${fmtINR(op.businessGenerated)}</b></div></div>
-        <div class="ts" style="background:#0f172a;"><div class="ts-l" style="color:rgba(255,255,255,.5);">FTD</div><div class="ts-v" style="color:#fbbf24;">${fmtINR(op.ftd||0)}</div></div>
-        <div class="ts"><div class="ts-l">LMTD</div><div class="ts-v">${fmtINR(op.lmtd||t.summary.prevMonthPremium)}</div></div>
-        <div class="ts"><div class="ts-l">MoM</div><div class="ts-v ${mom>=0?'pos':'neg'}">${mom>=0?'+':''}${mom}%</div></div>
-        <div class="ts"><div class="ts-l">Target</div><div class="ts-v">${fmtINR(op.target)}</div></div>
-        <div class="ts"><div class="ts-l">Ach.</div><div class="ts-v ${op.achievementPct>=80?'pos':op.achievementPct>=40?'':'neg'}">${op.achievementPct}%</div></div>
-        <div class="ts"><div class="ts-l">Max Pot.</div><div class="ts-v">${fmtINR(op.maxPotential)}</div></div>
-        <div class="ts"><div class="ts-l">Active</div><div class="ts-v pos">${fmtInt(op.activePartners)}</div></div>
-        <div class="ts"><div class="ts-l">Inactive</div><div class="ts-v neg">${fmtInt(op.inactivePartners)}</div></div>
-        <div class="ts"><div class="ts-l">Connected</div><div class="ts-v pos">${fmtInt(op.connectedPartners)}</div></div>
-        <div class="ts"><div class="ts-l">Calls</div><div class="ts-v pos">${fmtInt(op.calls)}</div></div>
-        <div class="ts"><div class="ts-l">Visits</div><div class="ts-v pos">${fmtInt(op.visits)}</div></div>
-      </div>
-    </div>`;
-  }).join('');
-  $('teamGrid').querySelectorAll('.openTeamMember').forEach(b=>b.addEventListener('click',()=>openTeamModal(b.dataset.key)));
-}
-['fTeamRole','fTeamSearch','fTeamState'].forEach(id=>{const el=$(id);if(!el)return;el.addEventListener(el.tagName==='INPUT'?'input':'change',renderTeam);});
-
-function openTeamModal(key){
-  const member=(state.team||[]).find(t=>(t.role+'|'+t.name)===key);if(!member)return;
-  const op=member.overallProject;
-  const rows=member.partners.map(p=>{
-    const mom=p.prevMonth>0?Math.round((p.currentMonth-p.prevMonth)/p.prevMonth*100):0;
-    return `<tr><td>${safe(p.name)}<div class="partner-sub">${safe(p.gid)}</div></td><td>${safe(p.city)}, ${safe(p.state)}</td><td>${fmtINR(p.maxPotential)}</td><td>${fmtINR(p.overallPotential)}</td><td>${fmtINR(p.target)}</td><td class="pos"><b>${fmtINR(p.currentMonth)}</b></td><td>${fmtINR(p.prevMonth)}</td><td class="${mom>=0?'pos':'neg'}">${mom>=0?'+':''}${mom}%</td><td><span class="${p.isGrowth?'trend-pos':'trend-neg'}">${p.isGrowth?'▲ Growth':'▼ Degrowth'}</span></td><td>${p.isActive?'<span class="badge badge-green">Active</span>':'<span class="badge badge-red">Inactive</span>'}</td><td class="pos">${fmtInt(p.calls)}</td><td class="pos">${fmtInt(p.visits)}</td><td><button class="btn-link openModal" data-gid="${safe(p.gid)}">View</button></td></tr>`;
-  }).join('');
-  $('modalBody').innerHTML=`<h2>${safe(member.name)} <span class="role-chip">${safe(member.role)}</span></h2>
-  <div class="kpi-row">
-    <div class="kpi-mini"><div><div class="kpi-mini-label">Partners</div><div class="kpi-mini-val">${fmtInt(op.totalPartners)}</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">MTD</div><div class="kpi-mini-val pos">${fmtINR(op.businessGenerated)}</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">LMTD</div><div class="kpi-mini-val">${fmtINR(op.lmtd||member.summary.prevMonthPremium)}</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">Target</div><div class="kpi-mini-val">${fmtINR(op.target)}</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">Ach.</div><div class="kpi-mini-val">${op.achievementPct}%</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">Active</div><div class="kpi-mini-val pos">${fmtInt(op.activePartners)}</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">Connected</div><div class="kpi-mini-val pos">${fmtInt(op.connectedPartners)}</div></div></div>
-    <div class="kpi-mini"><div><div class="kpi-mini-label">Calls / Visits</div><div class="kpi-mini-val pos">${fmtInt(op.calls)} / ${fmtInt(op.visits)}</div></div></div>
-  </div>
-  <div class="table-wrap"><table class="ptable"><thead><tr><th>Partner</th><th>City, State</th><th>Max Pot.</th><th>Overall Pot.</th><th>Target</th><th>MTD</th><th>LMTD</th><th>MoM%</th><th>Growth</th><th>Status</th><th>Calls</th><th>Visits</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-  $('partnerModal').classList.remove('hidden');
-  $('modalBody').querySelectorAll('.openModal').forEach(b=>b.addEventListener('click',()=>openModal(b.dataset.gid)));
-}
-
-// ── Daily Run Rate Tab ──
-function renderRunRateStrip(){
-  $('rr-today').textContent=fmtINR(state.runRate);
-  $('rr-mtd').textContent=fmtINR(state.todayMTD);
-  $('rr-lmtd').textContent=fmtINR(state.yesterdayMTD);
-}
-
-function renderRunRate(){
-  renderRunRateStrip();
-  const hist=state.dailyHistory;
-  if(!hist||!hist.length){return;}
-  const labels=hist.map(h=>h.date.slice(5)); // MM-DD
-  const mtdData=hist.map(h=>h.totalMTD);
-  const rrData=hist.map((h,i)=>i===0?0:h.totalMTD-hist[i-1].totalMTD);
-
-  destroyChart('dailyTrend');
-  state.charts.dailyTrend=new Chart($('chartDailyTrend'),{
-    type:'line',
-    data:{labels,datasets:[{label:'Total MTD',data:mtdData,borderColor:CHART_COLORS.blue,backgroundColor:CHART_COLORS.blueLight,fill:true,tension:0.4,pointRadius:4,pointBackgroundColor:CHART_COLORS.blue}]},
-    options:{responsive:true,maintainAspectRatio:false,scales:{y:{ticks:{callback:v=>fmtINR(v)}}},plugins:{legend:{position:'bottom'}}}
-  });
-
-  destroyChart('runRate');
-  state.charts.runRate=new Chart($('chartRunRate'),{
-    type:'bar',
-    data:{labels:labels.slice(1),datasets:[{label:'Daily Run Rate',data:rrData.slice(1),backgroundColor:rrData.slice(1).map(v=>v>=0?CHART_COLORS.green:CHART_COLORS.red),borderRadius:5}]},
-    options:{responsive:true,maintainAspectRatio:false,scales:{y:{ticks:{callback:v=>fmtINR(v)}}},plugins:{legend:{position:'bottom'}}}
-  });
-}
-
-// ── Partner Modal ──
-function openModal(gid){
-  const all=[...state.partners,...(state.myPartners||[]),...(state.amPerf||[]).flatMap(a=>a.partners||[]),...(state.team||[]).flatMap(t=>t.partners||[])];
-  const p=all.find(x=>x.gid===gid);if(!p)return;
-  const maxAch=p.maxPotential>0?Math.round(p.currentMonth/p.maxPotential*100):0;
-  const mom=p.prevMonth>0?Math.round((p.currentMonth-p.prevMonth)/p.prevMonth*100):0;
-  $('modalBody').innerHTML=`
-    <h2>${safe(p.name)} <span class="role-chip">${safe(p.gid)}</span></h2>
-    <div class="modal-sub">${safe(p.city)}, ${safe(p.state)} • Owner: ${safe(p.ownerName)} (${safe(p.ownerRole)})</div>
-    <div class="kpi-row">
-      <div class="kpi-mini"><div><div class="kpi-mini-label">Max Potential</div><div class="kpi-mini-val pos">${fmtINR(p.maxPotential)}</div></div></div>
-      <div class="kpi-mini"><div><div class="kpi-mini-label">Overall Potential</div><div class="kpi-mini-val ${p.overallPotential>0?'pos':''}">${fmtINR(p.overallPotential)}</div></div></div>
-      <div class="kpi-mini"><div><div class="kpi-mini-label">Target (May)</div><div class="kpi-mini-val">${fmtINR(p.target)}</div></div></div>
-      <div class="kpi-mini" style="background:linear-gradient(135deg,#0f172a,#1e3a5f);"><div><div class="kpi-mini-label" style="color:rgba(255,255,255,.5);">FTD (Today)</div><div class="kpi-mini-val" style="color:#fbbf24;"><b>${fmtINR(p.ftd||0)}</b></div></div></div>
-      <div class="kpi-mini"><div><div class="kpi-mini-label">FTD</div><div class="kpi-mini-val" style="color:#fbbf24;">${fmtINR(p.ftd||0)}</div></div></div>
-      <div class="kpi-mini"><div><div class="kpi-mini-label">MTD (May'26)</div><div class="kpi-mini-val ${p.currentMonth>=p.prevMonth?'pos':'neg'}"><b>${fmtINR(p.currentMonth)}</b></div></div></div>
-      <div class="kpi-mini"><div><div class="kpi-mini-label">LMTD (Apr'26)</div><div class="kpi-mini-val">${fmtINR(p.prevMonth)}</div></div></div>
-      <div class="kpi-mini"><div><div class="kpi-mini-label">MoM</div><div class="kpi-mini-val ${mom>=0?'pos':'neg'}">${mom>=0?'+':''}${mom}%</div></div></div>
-      <div class="kpi-mini"><div><div class="kpi-mini-label">Calls</div><div class="kpi-mini-val ${p.calls>0?'pos':''}"><b>${fmtInt(p.calls)}</b></div></div></div>
-      <div class="kpi-mini"><div><div class="kpi-mini-label">Visits</div><div class="kpi-mini-val ${p.visits>0?'pos':''}"><b>${fmtInt(p.visits)}</b></div></div></div>
-    </div>
-    <div class="potential-box">
-      <b>Max-Pot Ach:</b> <span class="${maxAch>=80?'pos':maxAch>=40?'':'neg'}">${maxAch}%</span> &nbsp;|&nbsp;
-      <b>Growth:</b> ${p.isGrowth?'<span class="pos">▲ Growth</span>':'<span class="neg">▼ Degrowth</span>'} &nbsp;|&nbsp;
-      <b>Status:</b> ${p.isActive?'<span class="pos">Active</span>':'<span class="neg">Inactive</span>'}
-    </div>
-    <h3>14-Month Trend</h3>
-    <canvas id="trendChart" style="max-height:240px;"></canvas>
-    <h3>Connect Status — Calls: <span class="pos"><b>${fmtInt(p.calls)}</b></span> &nbsp; Visits: <span class="pos"><b>${fmtInt(p.visits)}</b></span></h3>
-    <div class="row-flex">
-      <div>${p.isActive?'<span class="badge badge-green">Active</span>':'<span class="badge badge-red">Inactive</span>'}</div>
-      <div>${p.connected?'<span class="badge badge-blue">Connected</span>':'<span class="badge badge-amber">Not Connected</span>'}</div>
-    </div>
-    <h3>Monthly History</h3>
-    <div class="table-wrap"><table class="ptable compact"><thead><tr>${MONTHS.map(m=>`<th>${m}</th>`).join('')}<th>May'26</th></tr></thead><tbody><tr>${p.monthlyData.map(v=>`<td>${fmtINR(v)}</td>`).join('')}<td class="pos"><b>${fmtINR(p.currentMonth)}</b></td></tr></tbody></table></div>
-    <h3>Remark</h3>
-    <textarea id="remarkBox" rows="3">${safe(p.remark||'')}</textarea>
-    <button class="btn-primary" id="btnSaveRemark">Save Remark</button>
-    <div id="remarkStatus" class="remark-status"></div>`;
-  $('partnerModal').classList.remove('hidden');
-
-  const allData=[...p.monthlyData,p.currentMonth];
-  const ptColors=allData.map((v,i)=>i===0?'#94a3b8':v>=allData[i-1]?CHART_COLORS.green:CHART_COLORS.red);
-  new Chart($('trendChart'),{type:'line',data:{labels:[...MONTHS,"May'26"],datasets:[{label:'Monthly business',data:allData,borderColor:'#2563eb',backgroundColor:CHART_COLORS.blueLight,fill:true,tension:0.3,pointBackgroundColor:ptColors,pointRadius:5,segment:{borderColor:ctx=>allData[ctx.p1DataIndex]>=allData[ctx.p0DataIndex]?CHART_COLORS.green:CHART_COLORS.red}},{label:'May Target',data:new Array(13).fill(null).concat([p.target]),borderColor:'#9333ea',borderDash:[5,5],pointRadius:0,fill:false}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{ticks:{callback:v=>fmtINR(v)}}},plugins:{legend:{position:'bottom'}}}});
-
-  $('btnSaveRemark').addEventListener('click',()=>{
-    const r=$('remarkBox').value;$('remarkStatus').textContent='Saving…';
-    fetch(API_URL+'?action=saveRemark&gid='+encodeURIComponent(user.gid)+'&partnerGid='+encodeURIComponent(p.gid)+'&remark='+encodeURIComponent(r))
-      .then(r=>r.json()).then(res=>{$('remarkStatus').textContent=res.success?'✓ Saved':'✗ '+(res.message||'Failed');if(res.success)p.remark=r;})
-      .catch(err=>$('remarkStatus').textContent='✗ '+err.message);
-  });
-}
-
-$('modalClose').addEventListener('click',()=>$('partnerModal').classList.add('hidden'));
-$('modalBackdrop').addEventListener('click',()=>$('partnerModal').classList.add('hidden'));
-
-loadDashboard();
 })();
