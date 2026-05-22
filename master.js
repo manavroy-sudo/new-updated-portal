@@ -1,824 +1,738 @@
 /* ============================================================
-   Partner Engage Portal — master.js v12
-   Master Admin dashboard — all zones, all partners
-   Light theme | Full partner list | Unconnected tab | Tele-RM tab
+   Partner Engage Portal — master.js v13
+   Master dashboard: all zones, Tele-RM, AM grid,
+   unconnected list, login activity, partner View modal
    ============================================================ */
 (function(){
 'use strict';
 
-var API_URL=window.API_URL||(window.CONFIG&&CONFIG.API_URL)||'';
-var session=JSON.parse(sessionStorage.getItem('pe_session')||'{}');
-if(!session.empId||session.empId.toUpperCase()!=='MASTER'){ window.location.href='index.html'; return; }
+var API=(typeof API_URL!=='undefined')?API_URL:'';
+var DATA=null,USER=null;
+var ALL_PARTNERS=[],TELE_PARTNERS=[];
+var M_AP_PAGE=1,M_UNCONN_PAGE=1;
+var ITEMS=100;
 
-var MONTH_LABELS=["Apr'25","May'25","Jun'25","Jul'25","Aug'25","Sep'25","Oct'25","Nov'25","Dec'25","Jan'26","Feb'26","Mar'26","Apr'26","May'26"];
+var MONTHS=["Apr'25","May'25","Jun'25","Jul'25","Aug'25","Sep'25",
+            "Oct'25","Nov'25","Dec'25","Jan'26","Feb'26","Mar'26","Apr'26"];
+var MONTH_KEYS=['apr25','may25','jun25','jul25','aug25','sep25',
+               'oct25','nov25','dec25','jan26','feb26','mar26','apr26'];
 
-var state={
-  data:null, loading:false, activeTab:'mOverview',
-  partnerPage:0, partnerPageSize:300,
-  partnerSearch:'', partnerZone:'', partnerStatus:'', partnerOwner:'',
-  uncZone:'', uncRole:'', uncSearch:'',
-  teleSearch:'', teleStatus:''
-};
-
-// ── Helpers ─────────────────────────────────────────────────
-function $(id){ return document.getElementById(id); }
-function fmt(v,cr){
-  if(v===undefined||v===null||isNaN(v)) return '—';
-  var abs=Math.abs(v),pref=v<0?'-':'',s='';
-  if(cr){
-    if(abs>=10000000) s=(abs/10000000).toFixed(2)+' Cr';
-    else if(abs>=100000) s=(abs/100000).toFixed(2)+' L';
-    else if(abs>=1000) s=(abs/1000).toFixed(1)+' K';
-    else s=abs.toLocaleString('en-IN');
-    return '₹'+pref+s;
-  }
-  return pref+(abs>=10000000?(abs/10000000).toFixed(2)+' Cr':abs>=100000?(abs/100000).toFixed(2)+' L':abs.toLocaleString('en-IN'));
+// ── Helpers ──────────────────────────────────────────────────
+function $(id){return document.getElementById(id);}
+function safe(v){return(v===null||v===undefined)?'':String(v);}
+function fmt(v){
+  v=Number(v)||0;
+  if(v===0)return'₹0';
+  if(Math.abs(v)>=10000000)return'₹'+(v/10000000).toFixed(2)+' Cr';
+  if(Math.abs(v)>=100000)return'₹'+(v/100000).toFixed(2)+' L';
+  if(Math.abs(v)>=1000)return'₹'+(v/1000).toFixed(1)+' K';
+  return'₹'+Math.round(v).toLocaleString('en-IN');
 }
-function fmtPct(v){ if(v===undefined||v===null||isNaN(v)) return '—'; return (v>0?'+':'')+v.toFixed(1)+'%'; }
-function fmtN(v){ return (v||0).toLocaleString('en-IN'); }
-function clr(v){ return v>=0?'green':'red'; }
-function mtdClr(m,l){ return m>=l?'green':'red'; }
-function showLoading(show){ var el=$('loadingBar'); if(el) el.style.display=show?'block':'none'; }
-function safe(s){ return String(s||'').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function debounce(fn,ms){ var t; return function(){clearTimeout(t);t=setTimeout(fn,ms);}; }
+function fmtShort(v){
+  if(!v||v===0)return'0';
+  if(v>=10000000)return(v/10000000).toFixed(1)+'Cr';
+  if(v>=100000)return(v/100000).toFixed(1)+'L';
+  if(v>=1000)return(v/1000).toFixed(0)+'K';
+  return String(Math.round(v));
+}
+function fmtN(v){return(Number(v)||0).toLocaleString('en-IN');}
 
-// ── API ─────────────────────────────────────────────────────
-function apiFetch(params,cb){
-  var url=API_URL+'?'+Object.entries(params).map(function(kv){return encodeURIComponent(kv[0])+'='+encodeURIComponent(kv[1]);}).join('&');
-  var cbName='cb_'+Date.now()+'_'+Math.random().toString(36).slice(2);
-  window[cbName]=function(data){ try{delete window[cbName];}catch(e){} var s=document.getElementById('_jsonp_'+cbName); if(s)s.parentNode.removeChild(s); cb(null,data); };
+function statusPill(a){
+  var s=String(a||'').toLowerCase();
+  var ok=s==='active'||s==='1'||s==='yes'||Number(a)>0;
+  return ok
+    ?'<span class="pill pill-active">● Active</span>'
+    :'<span class="pill pill-inactive">○ Inactive</span>';
+}
+function growthPill(g){
+  var s=String(g||'').toLowerCase();
+  if(s.indexOf('degrowth')>=0)return'<span class="pill pill-degrowth">▼ Degrowth</span>';
+  if(s.indexOf('growth')>=0)return'<span class="pill pill-growth">▲ Growth</span>';
+  var pv=parseFloat(String(g).replace('%',''))||0;
+  if(pv>0)return'<span class="pill pill-growth">▲ Growth</span>';
+  if(pv<0)return'<span class="pill pill-degrowth">▼ Degrowth</span>';
+  return'<span class="pill pill-inactive">— Flat</span>';
+}
+
+// ── API call via JSONP ────────────────────────────────────────
+function callApi(action,params,cb){
+  var url=API+'?action='+encodeURIComponent(action);
+  if(params)Object.keys(params).forEach(function(k){
+    url+='&'+encodeURIComponent(k)+'='+encodeURIComponent(params[k]);
+  });
+  var cbN='cb_'+Date.now()+'_'+Math.floor(Math.random()*9999);
+  window[cbN]=function(d){
+    delete window[cbN];
+    var s=document.getElementById('jsonp_'+cbN);
+    if(s)s.remove();
+    cb(null,d);
+  };
+  url+='&callback='+cbN;
   var s=document.createElement('script');
-  s.id='_jsonp_'+cbName;
-  s.src=url+'&callback='+cbName;
-  s.onerror=function(){cb(new Error('API error — check Apps Script deployment'));};
+  s.id='jsonp_'+cbN;s.src=url;
+  s.onerror=function(){cb(new Error('Network error'));};
   document.head.appendChild(s);
 }
 
-function loadData(){
-  if(state.loading) return;
-  state.loading=true; showLoading(true);
-  apiFetch({action:'getMaster',uid:'MASTER'},function(err,data){
-    state.loading=false; showLoading(false);
-    if(err||!data||!data.success){ showError(err?err.message:data&&data.message||'Load failed'); return; }
-    state.data=data;
-    renderAll();
+function setLoading(show,msg){
+  $('loadingScreen').style.display=show?'flex':'none';
+  if(msg)$('loadingMsg').textContent=msg;
+}
+
+// ── Summarise a partner list ──────────────────────────────────
+function summarizeList(partners){
+  var s={total:partners.length,mtd:0,lmtd:0,ftd:0,calls:0,visits:0,
+         maxPot:0,oPot:0,target:0,active:0,inactive:0,
+         connected:0,notConn:0,growth:0,degrowth:0,mom:0,ach:0};
+  partners.forEach(function(p){
+    s.mtd    +=p.mtd||0;    s.lmtd   +=p.lmtd||0;
+    s.ftd    +=p.ftd||0;    s.calls  +=p.calls||0;
+    s.visits +=p.visits||0; s.maxPot +=p.maxPot||0;
+    s.oPot   +=p.oPot||0;   s.target +=p.target||0;
+    var a=String(p.active||'').toLowerCase();
+    if(a==='active'||a==='1'||a==='yes'||Number(p.active)>0)s.active++;else s.inactive++;
+    if(p.calls>0||p.visits>0)s.connected++;else s.notConn++;
+    var g=String(p.growth||'').toLowerCase();
+    if(g.indexOf('degrowth')>=0)s.degrowth++;
+    else if(g.indexOf('growth')>=0||parseFloat(String(p.growth||''))>0)s.growth++;
+  });
+  s.mom=s.lmtd>0?Math.round((s.mtd-s.lmtd)*100/s.lmtd):0;
+  s.ach=s.target>0?Math.round(s.mtd*100/s.target):0;
+  return s;
+}
+
+// ── Boot ─────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded',function(){
+  var saved=localStorage.getItem('pe_user');
+  if(!saved){window.location.href='index.html';return;}
+  try{USER=JSON.parse(saved);}catch(e){window.location.href='index.html';return;}
+  if(!USER||USER.role!=='MASTER'){window.location.href='dashboard.html';return;}
+
+  setLoading(true,'Loading master data…');
+  callApi('getMaster',{uid:USER.gid},function(err,res){
+    setLoading(false);
+    if(err||!res||!res.success){
+      alert('Failed to load: '+(res&&res.message||'Unknown error'));
+      return;
+    }
+    DATA=res;
+    ALL_PARTNERS =(DATA.main&&DATA.main.partners)||[];
+    TELE_PARTNERS=(DATA.tele&&DATA.tele.partners)||[];
+
+    $('appShell').style.display='block';
+    $('hdrName').textContent=USER.name||'Master';
+    $('btnLogout').addEventListener('click',function(){
+      localStorage.removeItem('pe_user');
+      window.location.href='index.html';
+    });
+
+    setupNav();
+    buildOverview();
+    populateFilters();
+  });
+});
+
+// ── Nav ───────────────────────────────────────────────────────
+function setupNav(){
+  document.querySelectorAll('.nav-tab').forEach(function(btn){
+    btn.addEventListener('click',function(){showTab(this.dataset.tab);});
+  });
+}
+function showTab(tab){
+  document.querySelectorAll('.nav-tab').forEach(function(b){
+    b.classList.toggle('active',b.dataset.tab===tab);
+  });
+  document.querySelectorAll('.page').forEach(function(p){
+    p.classList.toggle('active',p.id==='page-'+tab);
+  });
+  if(tab==='zones')         renderZones();
+  if(tab==='allPartners')   renderAllPartners();
+  if(tab==='amPerf')        renderAMPerf();
+  if(tab==='teleRM')        renderTeleRM();
+  if(tab==='unconnected')   renderUnconnected();
+  if(tab==='loginActivity') renderLoginActivity();
+}
+
+// ── Donut chart builder ───────────────────────────────────────
+function buildDonut(id,values,labels,colors){
+  var el=$(id);if(!el)return;
+  var total=values.reduce(function(a,b){return a+b;},0)||1;
+  var r=50,cx=60,cy=60,sw=16,circ=2*Math.PI*r,offset=circ*0.25,svg='';
+  values.forEach(function(v,i){
+    var slice=(v/total)*circ;
+    svg+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+colors[i]+'"'+
+         ' stroke-width="'+sw+'" stroke-dasharray="'+slice+' '+(circ-slice)+'"'+
+         ' stroke-dashoffset="'+offset+'" stroke-linecap="butt"/>';
+    offset-=slice;
+  });
+  var inner='<svg class="donut-svg" viewBox="0 0 120 120" width="100" height="100">'+
+    '<circle cx="60" cy="60" r="50" fill="none" stroke="var(--border)" stroke-width="16"/>'+svg+
+    '<text x="60" y="56" text-anchor="middle" fill="var(--text)" font-size="14" font-weight="700"'+
+    ' font-family="DM Sans,sans-serif">'+fmtN(values[0])+'</text>'+
+    '<text x="60" y="70" text-anchor="middle" fill="var(--text2)" font-size="9"'+
+    ' font-family="DM Sans,sans-serif">'+labels[0]+'</text></svg>';
+  var legend='<div class="donut-legend">'+values.map(function(v,i){
+    var p=total>0?Math.round(v*100/total):0;
+    return'<div class="donut-legend-item">'+
+      '<div class="donut-legend-label">'+
+        '<div class="donut-legend-dot" style="background:'+colors[i]+'"></div>'+
+        '<span>'+labels[i]+'</span>'+
+      '</div>'+
+      '<div><span class="donut-legend-val" style="color:'+colors[i]+'">'+fmtN(v)+'</span>'+
+      ' <span style="color:var(--text3);font-size:11px;">('+p+'%)</span></div>'+
+      '</div>';
+  }).join('')+'</div>';
+  el.innerHTML=inner+legend;
+}
+
+// ── Overview ──────────────────────────────────────────────────
+function buildOverview(){
+  var s=(DATA.main&&DATA.main.summary)||{};
+  $('m_total').textContent   =fmtN(s.total||0);
+  $('m_active').textContent  ='Active: '+fmtN(s.active||0);
+  $('m_inactive').textContent='Inactive: '+fmtN(s.inactive||0);
+  $('m_mtd').textContent     =fmt(s.mtd||0).replace('₹','');
+  $('m_mom').textContent     ='MoM: '+(s.mom>=0?'+':'')+fmtN(s.mom||0)+'%';
+  $('m_ach').textContent     ='Ach: '+fmtN(s.ach||0)+'%';
+  $('m_eng').textContent     =fmtN(s.connected||0)+'/'+fmtN(s.total||0);
+  $('m_conn').textContent    ='Connected: '+fmtN(s.connected||0);
+  $('m_notconn').textContent ='Not: '+fmtN(s.notConn||0);
+  $('m_maxpot').textContent  =fmt(s.maxPot||0).replace('₹','');
+  $('m_opot').textContent    =fmt(s.oPot||0).replace('₹','');
+  $('m_target').textContent  =fmt(s.target||0).replace('₹','');
+  $('m_calls').textContent   =fmtN(s.calls||0);
+  $('m_visits').textContent  =fmtN(s.visits||0);
+  $('m_gd').textContent      =fmtN(s.growth||0)+' / '+fmtN(s.degrowth||0);
+
+  buildDonut('m_chartActive', [s.active||0,  s.inactive||0], ['Active','Inactive'],          ['var(--green)','var(--text3)']);
+  buildDonut('m_chartConn',   [s.connected||0,s.notConn||0], ['Connected','Not Connected'],   ['var(--blue)', 'var(--amber)']);
+  buildDonut('m_chartGrowth', [s.growth||0,  s.degrowth||0], ['Growth','Degrowth'],           ['var(--green)','var(--red)']);
+}
+
+// ── Populate filter dropdowns ─────────────────────────────────
+function populateFilters(){
+  var zones={},states={},owners={};
+  ALL_PARTNERS.forEach(function(p){
+    if(p.zone)  zones[p.zone]=1;
+    if(p.state) states[p.state]=1;
+    if(p.oName) owners[p.oName]=p.oRole||'';
+  });
+
+  ['m_apZone','m_amZone'].forEach(function(id){
+    var el=$(id);if(!el)return;
+    Object.keys(zones).sort().forEach(function(z){
+      var o=document.createElement('option');o.value=z;o.textContent=z;el.appendChild(o);
+    });
+  });
+
+  var stEl=$('m_apState');
+  if(stEl) Object.keys(states).sort().forEach(function(s){
+    var o=document.createElement('option');o.value=s;o.textContent=s;stEl.appendChild(o);
+  });
+
+  var owEl=$('m_apOwner');
+  if(owEl) Object.keys(owners).sort().forEach(function(n){
+    var o=document.createElement('option');o.value=n;o.textContent=n+' ('+owners[n]+')';owEl.appendChild(o);
+  });
+
+  // Filter listeners — All Partners
+  ['m_apSearch','m_apZone','m_apState','m_apOwner','m_apStatus','m_apTrend'].forEach(function(id){
+    var el=$(id);if(el)el.addEventListener('input',function(){M_AP_PAGE=1;renderAllPartners();});
+  });
+  $('m_apClear')&&$('m_apClear').addEventListener('click',function(){
+    ['m_apSearch','m_apZone','m_apState','m_apOwner','m_apStatus','m_apTrend']
+      .forEach(function(id){var el=$(id);if(el)el.value='';});
+    M_AP_PAGE=1;renderAllPartners();
+  });
+  $('m_apExport')&&$('m_apExport').addEventListener('click',exportCSV);
+
+  // AM perf listeners
+  ['m_amSearch','m_amZone','m_amSort'].forEach(function(id){
+    var el=$(id);if(el)el.addEventListener('input',renderAMPerf);
+  });
+
+  // Modal close
+  $('modalClose')&&$('modalClose').addEventListener('click',function(){
+    $('partnerModal').classList.remove('open');
+  });
+  $('partnerModal')&&$('partnerModal').addEventListener('click',function(e){
+    if(e.target===$('partnerModal'))$('partnerModal').classList.remove('open');
+  });
+  $('tmModalClose')&&$('tmModalClose').addEventListener('click',function(){
+    $('teamModal').classList.remove('open');
+  });
+  $('teamModal')&&$('teamModal').addEventListener('click',function(e){
+    if(e.target===$('teamModal'))$('teamModal').classList.remove('open');
   });
 }
 
-function showError(msg){ var el=$('errorBanner'); if(el){el.textContent=msg;el.style.display='block';setTimeout(function(){el.style.display='none';},8000);} }
-
-// ── Render all ───────────────────────────────────────────────
-function renderAll(){
-  renderKPIStrip();
-  renderTab(state.activeTab);
-}
-
-function renderKPIStrip(){
-  var d=state.data; if(!d) return;
-  var op=d.overallProject||{};
-  var mClr=mtdClr(op.businessGenerated,op.lmtd);
-  var sets=[
-    {id:'hFTD',val:fmt(op.ftd,true),cls:'blue'},
-    {id:'hMTD',val:fmt(op.businessGenerated,true),cls:mClr},
-    {id:'hLMTD',val:fmt(op.lmtd,true),cls:'muted'},
-    {id:'hField',val:fmtN(op.fieldPartners),cls:''},
-    {id:'hTele',val:fmtN(op.telePartners),cls:'blue'},
-    {id:'hActive',val:fmtN(op.activePartners),cls:'green'},
-    {id:'hConnected',val:fmtN(op.connectedPartners),cls:'blue'},
-    {id:'hCalls',val:fmtN(op.totalCalls),cls:''},
-    {id:'hVisits',val:fmtN(op.totalVisits),cls:''}
-  ];
-  sets.forEach(function(s){ var el=$(s.id); if(el){el.className='kpi-val'+(s.cls?' '+s.cls:'');el.textContent=s.val;} });
-}
-
-// ── Tab routing ──────────────────────────────────────────────
-function renderTab(tab){
-  state.activeTab=tab;
-  document.querySelectorAll('.nav-tab').forEach(function(el){ el.classList.toggle('active',el.dataset.tab===tab); });
-  var views=['mOverview','mZones','mStateRank','mRolePerf','mAllPartners','mUnconnected','mTeleRM','mCities','mLogin'];
-  views.forEach(function(v){ var el=$(v+'View'); if(el) el.style.display=v===tab?'block':'none'; });
-  switch(tab){
-    case 'mOverview':    renderOverview(); break;
-    case 'mZones':       renderZones(); break;
-    case 'mStateRank':   renderStateRank(); break;
-    case 'mRolePerf':    renderRolePerf(); break;
-    case 'mAllPartners': renderAllPartners(); break;
-    case 'mUnconnected': renderUnconnected(); break;
-    case 'mTeleRM':      renderTeleRM(); break;
-    case 'mCities':      renderCities(); break;
-    case 'mLogin':       renderLoginActivity(); break;
-  }
-}
-
-// ── Overview ─────────────────────────────────────────────────
-function renderOverview(){
-  var d=state.data; if(!d) return;
-  renderZoneCards();
-  renderCharts();
-  renderOwnerCards('mZhCards',d.zhPerf,'ZH',false);
-  var shrh=(d.shPerf||[]).concat(d.rhPerf||[]).sort(function(a,b){return b.mtd-a.mtd;});
-  renderOwnerCards('mShCards',shrh,'SH/RH',false);
-  renderOwnerCards('mAmCards',d.amPerf,'AM',false);
-}
-
-function renderZoneCards(){
-  var d=state.data; if(!d) return;
-  var el=$('mZoneCards'); if(!el) return;
-  var zones=d.zoneSummaries||[];
-  var html='';
-  zones.forEach(function(z){
-    var mClr=mtdClr(z.mtd,z.lmtd);
-    var ach=Math.round(z.achPct||0);
-    var barW=Math.min(ach,100);
-    html+='<div class="zone-card">';
-    html+='<div class="zone-card-name">'+safe(z.zone)+'</div>';
-    html+='<div class="zone-card-mtd '+mClr+'">'+fmt(z.mtd,true)+'</div>';
-    html+='<div style="margin:4px 0 8px"><div class="progress-bar-bg"><div class="progress-bar-fill'+(ach<50?' red':'')+'" style="width:'+barW+'%"></div></div></div>';
-    html+='<div style="font-size:0.7rem;color:var(--text-muted);display:grid;grid-template-columns:1fr 1fr;gap:3px">';
-    html+='<span>LMTD: '+fmt(z.lmtd,true)+'</span>';
-    html+='<span>MoM: <b class="'+clr(z.momPct||0)+'">'+fmtPct(z.momPct||0)+'</b></span>';
-    html+='<span>Partners: '+fmtN(z.partners)+'</span>';
-    html+='<span>Active: <b class="green">'+fmtN(z.active)+'</b></span>';
-    html+='<span>Calls: '+fmtN(z.calls)+'</span>';
-    html+='<span>Visits: '+fmtN(z.visits)+'</span>';
-    html+='<span>Ach%: <b>'+ach+'%</b></span>';
-    html+='<span>Conn: <b class="blue">'+fmtN(z.connected)+'</b></span>';
-    html+='</div></div>';
-  });
-  el.innerHTML=html||'<div class="empty-state"><div class="empty-state-text">No zone data</div></div>';
-}
-
-function renderOwnerCards(containerId,perf,role,isTele){
-  var el=$(containerId); if(!el) return;
-  if(!perf||!perf.length){ el.innerHTML='<div class="empty-state"><div class="empty-state-text">No '+role+' data</div></div>'; return; }
-  var html='';
-  perf.slice(0,40).forEach(function(o){
-    var mClr=mtdClr(o.mtd,o.lmtd);
-    var achClr=o.achPct>=100?'green':o.achPct>=50?'amber':'red';
-    html+='<div class="card'+(isTele?' tele-card':'')+'" onclick="openMOwnerDrill(\''+safe(o.empId)+'\')">';
-    html+='<div class="card-name">'+safe(o.name)+'</div>';
-    html+='<div class="card-sub">'+safe(role)+' · '+safe(o.zone)+(o.state?' · '+safe(o.state):'')+' &nbsp;<small>'+safe(o.empId)+'</small></div>';
-    html+='<div class="card-metrics">';
-    html+='<div class="card-metric"><div class="card-metric-label">FTD</div><div class="card-metric-val blue">'+fmt(o.ftd,true)+'</div></div>';
-    html+='<div class="card-metric"><div class="card-metric-label">MTD</div><div class="card-metric-val '+mClr+'">'+fmt(o.mtd,true)+'</div></div>';
-    html+='<div class="card-metric"><div class="card-metric-label">LMTD</div><div class="card-metric-val muted">'+fmt(o.lmtd,true)+'</div></div>';
-    html+='<div class="card-metric"><div class="card-metric-label">MoM%</div><div class="card-metric-val '+clr(o.momPct||0)+'">'+fmtPct(o.momPct||0)+'</div></div>';
-    html+='<div class="card-metric"><div class="card-metric-label">Ach%</div><div class="card-metric-val '+achClr+'">'+Math.round(o.achPct||0)+'%</div></div>';
-    html+='<div class="card-metric"><div class="card-metric-label">Partners</div><div class="card-metric-val">'+fmtN(o.partners)+'</div></div>';
-    html+='</div>';
-    html+='<div class="card-footer">';
-    html+='<span>Active: <b class="green">'+fmtN(o.active)+'</b> · Inactive: <b class="red">'+fmtN(o.inactive)+'</b> · Conn: <b class="blue">'+fmtN(o.connected)+'</b></span>';
-    html+='<span>📞 '+fmtN(o.calls)+' / 🚶 '+fmtN(o.visits)+'</span>';
-    html+='</div></div>';
-  });
-  el.innerHTML='<div class="cards-grid">'+html+'</div>';
-}
-
-// ── Owner drill modal ─────────────────────────────────────────
-window.openMOwnerDrill=function(empId){
-  var d=state.data; if(!d) return;
-  var owner=null;
-  [d.zhPerf,d.shPerf,d.rhPerf,d.rmPerf,d.amPerf,d.teleRMPerf].forEach(function(arr){
-    if(arr) arr.forEach(function(o){ if(o.empId===empId) owner=o; });
-  });
-  var partners=(d.partners||[]).filter(function(p){ return p.ownerEmpId===empId; });
-  openMDrillModal(owner,partners);
-};
-
-function openMDrillModal(owner,partners){
-  var el=$('mOwnerModal'); if(!el) return;
-  var o=owner||{};
-  var mClr=mtdClr(o.mtd,o.lmtd);
-  var html='<div class="modal-kpis">';
-  [{l:'FTD',v:fmt(o.ftd,true),c:'blue'},{l:'MTD',v:fmt(o.mtd,true),c:mClr},
-   {l:'LMTD',v:fmt(o.lmtd,true),c:'muted'},{l:'MoM%',v:fmtPct(o.momPct||0),c:clr(o.momPct||0)},
-   {l:'Ach%',v:Math.round(o.achPct||0)+'%',c:o.achPct>=100?'green':o.achPct>=50?'amber':'red'},
-   {l:'Max Pot.',v:fmt(o.maxPot,true),c:''},{l:'Calls',v:fmtN(o.calls),c:'blue'},
-   {l:'Visits',v:fmtN(o.visits),c:'blue'},{l:'Partners',v:fmtN(o.partners),c:''},
-   {l:'Active',v:fmtN(o.active),c:'green'},{l:'Inactive',v:fmtN(o.inactive),c:'red'}
-  ].forEach(function(k){ html+='<div class="modal-kpi"><div class="modal-kpi-label">'+k.l+'</div><div class="modal-kpi-val '+k.c+'">'+k.v+'</div></div>'; });
-  html+='</div>';
-  html+='<div class="section-title" style="margin:14px 0 8px">Assigned Partners ('+partners.length+')</div>';
-  html+='<div style="overflow-x:auto"><table><thead><tr>';
-  html+='<th>Partner</th><th>State</th><th>Zone</th><th>FTD</th><th>MTD</th><th>LMTD</th><th>Overall Pot.</th><th>Calls</th><th>Visits</th><th>Status</th><th></th>';
-  html+='</tr></thead><tbody>';
-  if(!partners.length) html+='<tr><td colspan="11" style="text-align:center;padding:20px;color:var(--text-muted)">No partners assigned</td></tr>';
-  partners.slice(0,100).forEach(function(p){
-    var mc=mtdClr(p.mtd,p.lmtd);
-    html+='<tr>';
-    html+='<td><div class="partner-name">'+safe(p.name)+'</div><div class="partner-gid">'+safe(p.gid)+'</div></td>';
-    html+='<td class="muted">'+safe(p.state)+'</td>';
-    html+='<td class="muted">'+safe(p.zone)+'</td>';
-    html+='<td class="blue">'+fmt(p.ftd,true)+'</td>';
-    html+='<td class="'+mc+'" style="font-weight:700">'+fmt(p.mtd,true)+'</td>';
-    html+='<td class="muted">'+fmt(p.lmtd,true)+'</td>';
-    html+='<td>'+fmt(p.overallPot,true)+'</td>';
-    html+='<td>'+fmtN(p.calls)+'</td>';
-    html+='<td>'+fmtN(p.visits)+'</td>';
-    html+='<td><span class="card-badge '+(p.active?'badge-green':'badge-gray')+'">'+(p.active?'Active':'Inactive')+'</span></td>';
-    html+='<td><button class="btn btn-view" onclick="openMPartnerView(\''+safe(p.gid)+'\')">VIEW</button></td>';
-    html+='</tr>';
-  });
-  html+='</tbody></table></div>';
-  $('mOwnerModalTitle').textContent=(o.name||'Owner')+' — '+(o.role||'')+(o.zone?' · '+o.zone:'');
-  $('mOwnerModalBody').innerHTML=html;
-  el.classList.add('open');
-}
-
-// ── Zone Rankings ─────────────────────────────────────────────
+// ── Zone Summary ──────────────────────────────────────────────
 function renderZones(){
-  var d=state.data; if(!d) return;
-  var zones=d.zoneSummaries||[];
-  var el=$('mZoneTable'); if(!el) return;
-  var html='';
-  zones.forEach(function(z,i){
-    var mClr=mtdClr(z.mtd,z.lmtd);
-    var achClr=z.achPct>=100?'green':z.achPct>=50?'amber':'red';
-    html+='<tr>';
-    html+='<td style="font-weight:700;color:var(--text-muted)">#'+(i+1)+'</td>';
-    html+='<td class="partner-name">'+safe(z.zone)+'</td>';
-    html+='<td>'+fmtN(z.partners)+'</td>';
-    html+='<td>'+fmt(z.maxPot,true)+'</td>';
-    html+='<td>'+fmt(z.overallPot,true)+'</td>';
-    html+='<td class="blue">'+fmt(z.ftd,true)+'</td>';
-    html+='<td class="'+mClr+'" style="font-weight:700">'+fmt(z.mtd,true)+'</td>';
-    html+='<td class="muted">'+fmt(z.lmtd,true)+'</td>';
-    html+='<td class="'+clr(z.momPct||0)+'">'+fmtPct(z.momPct||0)+'</td>';
-    html+='<td class="'+achClr+'">'+Math.round(z.achPct||0)+'%</td>';
-    html+='<td class="green">'+fmtN(z.active)+'</td>';
-    html+='<td class="red">'+fmtN(z.inactive)+'</td>';
-    html+='<td class="blue">'+fmtN(z.connected)+'</td>';
-    html+='<td>'+fmtN(z.calls)+'</td>';
-    html+='<td>'+fmtN(z.visits)+'</td>';
-    html+='</tr>';
-  });
-  el.querySelector('tbody').innerHTML=html||'<tr><td colspan="15" style="text-align:center;padding:24px;color:var(--text-muted)">No zone data</td></tr>';
-}
+  var zones=DATA.zones||[];
+  var COLS=['#e53935','#00c853','#448aff','#ff9800','#9c27b0'];
+  $('m_zoneGrid').innerHTML=zones.map(function(z,i){
+    var s=z.summary||{};
+    var ach=s.target>0?Math.round(s.mtd*100/s.target):0;
+    var col=COLS[i%COLS.length];
+    return'<div class="team-card" data-zone="'+safe(z.zone)+'">'+
+      '<div class="tc-header">'+
+        '<div>'+
+          '<div class="tc-name">'+safe(z.zone)+' Zone</div>'+
+          '<div style="font-size:11px;color:var(--text2);margin-top:3px;">'+fmtN(z.count)+' partners</div>'+
+        '</div>'+
+        '<div class="tc-role" style="background:'+col+'22;color:'+col+'">ZH</div>'+
+      '</div>'+
+      '<div class="tc-metrics">'+
+        '<div><div class="tc-m-label">MTD</div><div class="tc-m-value amber">'+fmt(s.mtd||0)+'</div></div>'+
+        '<div><div class="tc-m-label">LMTD</div><div class="tc-m-value dim">'+fmt(s.lmtd||0)+'</div></div>'+
+        '<div><div class="tc-m-label">Target</div><div class="tc-m-value dim">'+fmt(s.target||0)+'</div></div>'+
+        '<div><div class="tc-m-label">Calls</div><div class="tc-m-value green">'+fmtN(s.calls||0)+'</div></div>'+
+        '<div><div class="tc-m-label">Visits</div><div class="tc-m-value red">'+fmtN(s.visits||0)+'</div></div>'+
+        '<div><div class="tc-m-label">Ach%</div><div class="tc-m-value '+(ach>=80?'green':ach>=50?'amber':'red')+'">'+ach+'%</div></div>'+
+      '</div>'+
+      '<div class="tc-bar"><div class="tc-bar-fill" style="width:'+Math.min(ach,100)+'%;background:'+col+'"></div></div>'+
+      '<div class="tc-footer">'+
+        '<span>Active: <strong class="up">'+fmtN(s.active||0)+'</strong></span>'+
+        '<span>Connected: '+fmtN(s.connected||0)+'/'+fmtN(z.count)+'</span>'+
+      '</div>'+
+    '</div>';
+  }).join('');
 
-// ── State Rankings ────────────────────────────────────────────
-function renderStateRank(){
-  var d=state.data; if(!d) return;
-  var states=d.stateSummaries||[];
-  var el=$('mStateTable'); if(!el) return;
-  var html='';
-  states.forEach(function(sm,i){
-    var mClr=mtdClr(sm.mtd,sm.lmtd);
-    var achPct=sm.achPct||0;
-    html+='<tr>';
-    html+='<td style="font-weight:700;color:var(--text-muted)">#'+(i+1)+'</td>';
-    html+='<td class="partner-name">'+safe(sm.state)+'</td>';
-    html+='<td class="muted">'+safe(sm.zone)+'</td>';
-    html+='<td>'+fmtN(sm.partners)+'</td>';
-    html+='<td>'+fmt(sm.maxPot,true)+'</td>';
-    html+='<td>'+fmt(sm.overallPot,true)+'</td>';
-    html+='<td class="blue">'+fmt(sm.ftd,true)+'</td>';
-    html+='<td class="'+mClr+'" style="font-weight:700">'+fmt(sm.mtd,true)+'</td>';
-    html+='<td class="muted">'+fmt(sm.lmtd,true)+'</td>';
-    html+='<td class="'+clr(sm.momPct||0)+'">'+fmtPct(sm.momPct||0)+'</td>';
-    html+='<td class="'+(achPct>=100?'green':achPct>=50?'amber':'red')+'">'+achPct.toFixed(0)+'%</td>';
-    html+='<td class="green">'+fmtN(sm.active)+'</td>';
-    html+='<td class="blue">'+fmtN(sm.connected)+'</td>';
-    html+='<td>'+Math.round(sm.engPct||0)+'%</td>';
-    html+='<td>'+fmtN(sm.calls)+'</td>';
-    html+='<td>'+fmtN(sm.visits)+'</td>';
-    html+='<td><button class="btn btn-view" onclick="mFilterToState(\''+safe(sm.state)+'\')">Partners</button></td>';
-    html+='</tr>';
+  $('m_zoneGrid').querySelectorAll('.team-card').forEach(function(card){
+    card.addEventListener('click',function(){
+      var zn=this.dataset.zone;
+      var zp=ALL_PARTNERS.filter(function(p){return p.zone===zn;});
+      openTeamModal({name:zn+' Zone',role:'Zone',count:zp.length,summary:summarizeList(zp),partners:zp});
+    });
   });
-  el.querySelector('tbody').innerHTML=html||'<tr><td colspan="17" style="text-align:center;padding:24px;color:var(--text-muted)">No data</td></tr>';
-}
-
-// ── Role Performance ──────────────────────────────────────────
-function renderRolePerf(){
-  var d=state.data; if(!d) return;
-  renderOwnerCards('mZhPerfCards',d.zhPerf,'ZH',false);
-  var shrh=(d.shPerf||[]).concat(d.rhPerf||[]).sort(function(a,b){return b.mtd-a.mtd;});
-  renderOwnerCards('mShPerfCards',shrh,'SH/RH',false);
-  renderOwnerCards('mRmPerfCards',d.rmPerf,'RM',false);
-  renderOwnerCards('mAmPerfCards',d.amPerf,'AM',false);
 }
 
 // ── All Partners ──────────────────────────────────────────────
-function getFilteredPartners(){
-  var d=state.data; if(!d) return [];
-  var partners=d.partners||[];
-  var search=state.partnerSearch.toLowerCase();
-  var zf=state.partnerZone, sf=state.partnerStatus, of2=state.partnerOwner.toLowerCase();
-  return partners.filter(function(p){
-    if(search&&!(p.name||'').toLowerCase().includes(search)&&!(p.gid||'').toLowerCase().includes(search)) return false;
-    if(zf&&p.zone!==zf) return false;
-    if(sf==='active'&&!p.active) return false;
-    if(sf==='inactive'&&p.active) return false;
-    if(sf==='connected'&&!p.connected) return false;
-    if(sf==='notconnected'&&p.connected) return false;
-    if(of2&&!(p.ownerName||'').toLowerCase().includes(of2)) return false;
+function applyAPFilters(list){
+  var search=($('m_apSearch')&&$('m_apSearch').value||'').toLowerCase().trim();
+  var zone  =($('m_apZone')  &&$('m_apZone').value  ||'');
+  var state =($('m_apState') &&$('m_apState').value ||'');
+  var owner =($('m_apOwner') &&$('m_apOwner').value ||'');
+  var status=($('m_apStatus')&&$('m_apStatus').value||'');
+  var trend =($('m_apTrend') &&$('m_apTrend').value ||'');
+
+  return list.filter(function(p){
+    if(search&&!(p.name||'').toLowerCase().includes(search)
+             &&!(p.gid||'').toLowerCase().includes(search)
+             &&!(p.city||'').toLowerCase().includes(search)) return false;
+    if(zone  &&p.zone!==zone)   return false;
+    if(state &&p.state!==state) return false;
+    if(owner &&p.oName!==owner) return false;
+    if(status){
+      var a=String(p.active||'').toLowerCase();
+      var ok=a==='active'||a==='1'||a==='yes'||Number(p.active)>0;
+      if(status==='active'&&!ok)  return false;
+      if(status==='inactive'&&ok) return false;
+    }
+    if(trend){
+      var g=String(p.growth||'').toLowerCase();
+      if(trend==='growth'  &&g.indexOf('degrowth')>=0) return false;
+      if(trend==='degrowth'&&g.indexOf('degrowth')<0)  return false;
+    }
     return true;
   });
 }
 
 function renderAllPartners(){
-  var filtered=getFilteredPartners();
-  var pageSize=state.partnerPageSize;
-  var totalPages=Math.ceil(filtered.length/pageSize);
-  if(state.partnerPage>=totalPages) state.partnerPage=0;
-  var page=state.partnerPage;
-  var paged=filtered.slice(page*pageSize,(page+1)*pageSize);
+  var filtered=applyAPFilters(ALL_PARTNERS);
+  $('m_apCount').textContent=fmtN(filtered.length)+' of '+fmtN(ALL_PARTNERS.length)+' partners';
 
-  var cnt=$('mPartnerCount'); if(cnt) cnt.textContent=filtered.length+' partners';
+  var totalPages=Math.max(1,Math.ceil(filtered.length/ITEMS));
+  if(M_AP_PAGE>totalPages)M_AP_PAGE=1;
+  var page=filtered.slice((M_AP_PAGE-1)*ITEMS,M_AP_PAGE*ITEMS);
 
-  // Render pagination
-  var pgHtml=buildPagination(totalPages,page,'mPartnerPage');
-  ['mPartnerPagination','mPartnerPagination2'].forEach(function(id){ var el=$(id); if(el) el.innerHTML=pgHtml+'<span style="margin-left:8px">Page '+(page+1)+' of '+totalPages+' ('+fmtN(filtered.length)+' total)</span>'; });
+  var body=$('m_apBody');
+  body.innerHTML=page.map(function(p){
+    var mom=p.lmtd>0?Math.round((p.mtd-p.lmtd)*100/p.lmtd):(p.mtd>0?100:0);
+    return'<tr>'+
+      '<td class="name-cell"><div class="p-name">'+safe(p.name)+'</div><div class="p-gid">'+safe(p.gid)+'</div></td>'+
+      '<td style="color:var(--text2)">'+safe(p.city)+'<br><span style="font-size:11px;color:var(--text3)">'+safe(p.state)+'</span></td>'+
+      '<td><span class="badge badge-grey">'+safe(p.zone)+'</span></td>'+
+      '<td style="color:var(--text2)">'+safe(p.oName)+'<br><span style="font-size:11px;color:var(--text3)">'+safe(p.oRole)+'</span></td>'+
+      '<td class="val-dim">'+fmt(p.maxPot)+'</td>'+
+      '<td class="val-amber">'+fmt(p.oPot)+'</td>'+
+      '<td class="val-dim">'+fmt(p.target)+'</td>'+
+      '<td class="'+(p.mtd>p.lmtd?'val-green':'val-amber')+'">'+fmt(p.mtd)+'</td>'+
+      '<td class="val-dim">'+fmt(p.lmtd)+'</td>'+
+      '<td class="'+(mom>=0?'val-green':'val-red')+'">'+(mom>=0?'+':'')+mom+'%</td>'+
+      '<td>'+growthPill(p.growth)+'</td>'+
+      '<td>'+statusPill(p.active)+'</td>'+
+      '<td class="val-green">'+fmtN(p.calls)+'</td>'+
+      '<td class="val-dim">'+fmtN(p.visits)+'</td>'+
+      '<td><button class="btn-view" data-gid="'+safe(p.gid)+'" data-name="'+safe(p.name)+'">View</button></td>'+
+      '</tr>';
+  }).join('');
 
-  var el=$('mPartnerTable'); if(!el) return;
-  var html='';
-  paged.forEach(function(p){
-    var mc=mtdClr(p.mtd,p.lmtd);
-    html+='<tr>';
-    html+='<td><div class="partner-name">'+safe(p.name)+'</div><div class="partner-gid">'+safe(p.gid)+(p.isTele?' <span class="tele-badge">TELE</span>':'')+'</div></td>';
-    html+='<td class="muted">'+safe(p.city)+'</td>';
-    html+='<td class="muted">'+safe(p.state)+'</td>';
-    html+='<td class="muted">'+safe(p.zone)+'</td>';
-    html+='<td class="muted">'+safe(p.ownerName)+'<br><small style="color:var(--text-muted)">'+safe(p.ownerRole)+'</small></td>';
-    html+='<td class="blue">'+fmt(p.ftd,true)+'</td>';
-    html+='<td class="'+mc+'" style="font-weight:700">'+fmt(p.mtd,true)+'</td>';
-    html+='<td class="muted">'+fmt(p.lmtd,true)+'</td>';
-    html+='<td>'+fmt(p.overallPot,true)+'</td>';
-    html+='<td>'+fmt(p.projection,true)+'</td>';
-    html+='<td>'+fmtN(p.calls)+'</td>';
-    html+='<td>'+fmtN(p.visits)+'</td>';
-    html+='<td>'+fmtN(p.monthsActive)+'</td>';
-    html+='<td>'+fmt(p.avgMonthly,true)+'</td>';
-    html+='<td><span class="card-badge '+(p.active?'badge-green':'badge-gray')+'">'+(p.active?'Active':'Inactive')+'</span></td>';
-    html+='<td><span class="card-badge '+(p.connected?'badge-blue':'badge-gray')+'">'+(p.connected?'Connected':'Not')+'</span></td>';
-    html+='<td><button class="btn btn-view" onclick="openMPartnerView(\''+safe(p.gid)+'\')">VIEW</button></td>';
-    html+='</tr>';
-  });
-  el.querySelector('tbody').innerHTML=html||'<tr><td colspan="17" style="text-align:center;padding:24px;color:var(--text-muted)">No partners found</td></tr>';
+  renderPagination('m_apPagination',M_AP_PAGE,totalPages,function(pg){M_AP_PAGE=pg;renderAllPartners();});
+  attachViewButtons(body);
 }
 
-function buildPagination(totalPages,currentPage,handler){
-  if(totalPages<=1) return '';
-  var html='';
-  var start=Math.max(0,currentPage-2), end=Math.min(totalPages-1,currentPage+2);
-  if(currentPage>0) html+='<button class="page-btn" onclick="'+handler+'(0)">«</button><button class="page-btn" onclick="'+handler+(currentPage-1)+'()">‹</button>';
-  for(var i=start;i<=end;i++){
-    html+='<button class="page-btn'+(i===currentPage?' active':'')+'" onclick="'+handler+'('+i+')">'+(i+1)+'</button>';
+// ── AM Performance ────────────────────────────────────────────
+function renderAMPerf(){
+  var search=($('m_amSearch')&&$('m_amSearch').value||'').toLowerCase();
+  var zone  =($('m_amZone')  &&$('m_amZone').value  ||'');
+  var sort  =($('m_amSort')  &&$('m_amSort').value  ||'mtd_desc');
+
+  var owners={};
+  ALL_PARTNERS.forEach(function(p){
+    var role=(p.oRole||'').toUpperCase().replace(':','').trim();
+    if(role!=='AM'&&role!=='RM') return;
+    if(zone&&p.zone!==zone)      return;
+    if(!owners[p.oName]) owners[p.oName]={name:p.oName,role:p.oRole,zone:p.zone,partners:[]};
+    owners[p.oName].partners.push(p);
+  });
+
+  var list=Object.values(owners).map(function(o){
+    return{name:o.name,role:o.role,zone:o.zone,count:o.partners.length,
+           summary:summarizeList(o.partners),partners:o.partners};
+  });
+
+  if(search) list=list.filter(function(o){return o.name.toLowerCase().indexOf(search)>=0;});
+
+  list.sort(function(a,b){
+    if(sort==='name_asc')   return a.name.localeCompare(b.name);
+    if(sort==='count_desc') return b.count-a.count;
+    return b.summary.mtd-a.summary.mtd;
+  });
+
+  var grid=$('m_amGrid');
+  if(list.length===0){
+    grid.innerHTML='<div class="empty-state"><div class="es-icon">👥</div><p>No AMs match.</p></div>';
+    return;
   }
-  if(currentPage<totalPages-1) html+='<button class="page-btn" onclick="'+handler+'('+(currentPage+1)+')">›</button><button class="page-btn" onclick="'+handler+'('+(totalPages-1)+')">»</button>';
-  return html;
-}
 
-window.mPartnerPage=function(n){ state.partnerPage=n; renderAllPartners(); };
-window.mFilterToState=function(st){ state.partnerZone=''; state.partnerStatus=''; state.activeTab='mAllPartners'; renderTab('mAllPartners'); };
+  grid.innerHTML=list.map(function(o){
+    var s=o.summary;
+    var ach=s.target>0?Math.round(s.mtd*100/s.target):0;
+    return'<div class="team-card">'+
+      '<div class="tc-header">'+
+        '<div>'+
+          '<div class="tc-name">'+safe(o.name)+'</div>'+
+          '<div style="font-size:11px;color:var(--text2);margin-top:3px;">'+safe(o.zone)+' · '+fmtN(o.count)+' partners</div>'+
+        '</div>'+
+        '<div class="tc-role">'+safe(o.role)+'</div>'+
+      '</div>'+
+      '<div class="tc-metrics">'+
+        '<div><div class="tc-m-label">MTD</div><div class="tc-m-value amber">'+fmt(s.mtd)+'</div></div>'+
+        '<div><div class="tc-m-label">LMTD</div><div class="tc-m-value dim">'+fmt(s.lmtd)+'</div></div>'+
+        '<div><div class="tc-m-label">Calls</div><div class="tc-m-value green">'+fmtN(s.calls)+'</div></div>'+
+        '<div><div class="tc-m-label">Visits</div><div class="tc-m-value red">'+fmtN(s.visits)+'</div></div>'+
+        '<div><div class="tc-m-label">Connected</div><div class="tc-m-value">'+fmtN(s.connected)+'/'+fmtN(o.count)+'</div></div>'+
+        '<div><div class="tc-m-label">Ach%</div><div class="tc-m-value '+(ach>=80?'green':ach>=50?'amber':'red')+'">'+ach+'%</div></div>'+
+      '</div>'+
+      '<div class="tc-bar"><div class="tc-bar-fill" style="width:'+Math.min(ach,100)+'%"></div></div>'+
+      '<div class="tc-footer">'+
+        '<span>MoM: <strong class="'+(s.mom>=0?'up':'down')+'">'+(s.mom>=0?'+':'')+s.mom+'%</strong></span>'+
+        '<span>Partners: '+fmtN(o.count)+'</span>'+
+      '</div>'+
+    '</div>';
+  }).join('');
 
-// ── Unconnected Partners ──────────────────────────────────────
-function renderUnconnected(){
-  var d=state.data; if(!d) return;
-  var partners=(d.partners||[]).filter(function(p){ return p.calls===0&&p.visits===0; });
-  var zf=($('mUncZone')||{}).value||'';
-  var rf=($('mUncRole')||{}).value||'';
-  var search=(($('mUncSearch')||{}).value||'').toLowerCase();
-  var filtered=partners.filter(function(p){
-    if(zf&&p.zone!==zf) return false;
-    if(rf&&(p.ownerRole||'').toUpperCase()!==rf) return false;
-    if(search&&!(p.name||'').toLowerCase().includes(search)&&!(p.ownerName||'').toLowerCase().includes(search)) return false;
-    return true;
-  }).sort(function(a,b){return (b.overallPot||0)-(a.overallPot||0);});
-  var cnt=$('mUncCount'); if(cnt) cnt.textContent=filtered.length+' unconnected partners';
-  var el=$('mUncTable'); if(!el) return;
-  var html='';
-  filtered.slice(0,500).forEach(function(p,i){
-    var mc=mtdClr(p.mtd,p.lmtd);
-    html+='<tr class="unconnected-row">';
-    html+='<td style="font-weight:700;color:var(--red)">#'+(i+1)+'</td>';
-    html+='<td><div class="partner-name">'+safe(p.name)+'</div><div class="partner-gid">'+safe(p.gid)+(p.isTele?' <span class="tele-badge">TELE</span>':'')+'</div></td>';
-    html+='<td class="muted">'+safe(p.city)+'</td>';
-    html+='<td class="muted">'+safe(p.state)+'</td>';
-    html+='<td class="muted">'+safe(p.zone)+'</td>';
-    html+='<td class="muted">'+safe(p.ownerName)+'</td>';
-    html+='<td><span class="card-badge badge-gray">'+safe(p.ownerRole)+'</span></td>';
-    html+='<td>'+fmt(p.bizPot,true)+'</td>';
-    html+='<td style="font-weight:700">'+fmt(p.overallPot,true)+'</td>';
-    html+='<td>'+fmt(p.projection,true)+'</td>';
-    html+='<td class="'+mc+'">'+fmt(p.mtd,true)+'</td>';
-    html+='<td class="muted">'+fmt(p.lmtd,true)+'</td>';
-    html+='<td class="red">0</td>';
-    html+='<td class="red">0</td>';
-    html+='<td><span class="card-badge '+(p.active?'badge-green':'badge-gray')+'">'+(p.active?'Active':'Inactive')+'</span></td>';
-    html+='<td><button class="btn btn-view" onclick="openMPartnerView(\''+safe(p.gid)+'\')">VIEW</button></td>';
-    html+='</tr>';
+  grid.querySelectorAll('.team-card').forEach(function(card,i){
+    card.addEventListener('click',function(){openTeamModal(list[i]);});
   });
-  el.querySelector('tbody').innerHTML=html||'<tr><td colspan="16" style="text-align:center;padding:24px;color:var(--green)">✅ All partners have been contacted!</td></tr>';
 }
 
 // ── Tele-RM ───────────────────────────────────────────────────
 function renderTeleRM(){
-  var d=state.data; if(!d) return;
-  var teleSum=d.teleRMSummary;
-  var kpiEl=$('mTeleKpi');
-  if(kpiEl&&teleSum){
-    var mClr=mtdClr(teleSum.mtd,teleSum.lmtd);
-    kpiEl.innerHTML='<div class="tele-summary-card">'
-      +'<div style="display:flex;align-items:center;justify-content:space-between">'
-      +'<div><div class="tele-section-title">📞 Tele-RM Channel Summary</div>'
-      +'<div class="tele-section-sub">'+fmtN(teleSum.partners)+' partners · Separate from field zones</div></div>'
-      +'<div style="text-align:right"><div style="font-size:1.4rem;font-weight:800;color:var(--blue)">'+fmt(teleSum.mtd,true)+'</div>'
-      +'<div style="font-size:0.7rem;color:#3b82f6">MTD · <span class="'+mClr+'">'+fmtPct(teleSum.momPct||0)+' MoM</span></div></div></div>'
-      +'<div class="tele-summary-grid">'
-      +'<div class="tele-kpi-box"><div class="tele-kpi-label">FTD</div><div class="tele-kpi-val">'+fmt(teleSum.ftd,true)+'</div></div>'
-      +'<div class="tele-kpi-box"><div class="tele-kpi-label">MTD</div><div class="tele-kpi-val '+mClr+'">'+fmt(teleSum.mtd,true)+'</div></div>'
-      +'<div class="tele-kpi-box"><div class="tele-kpi-label">LMTD</div><div class="tele-kpi-val">'+fmt(teleSum.lmtd,true)+'</div></div>'
-      +'<div class="tele-kpi-box"><div class="tele-kpi-label">Max Pot.</div><div class="tele-kpi-val">'+fmt(teleSum.maxPot,true)+'</div></div>'
-      +'<div class="tele-kpi-box"><div class="tele-kpi-label">Overall Pot.</div><div class="tele-kpi-val">'+fmt(teleSum.overallPot,true)+'</div></div>'
-      +'<div class="tele-kpi-box"><div class="tele-kpi-label">Ach%</div><div class="tele-kpi-val">'+Math.round(teleSum.achPct||0)+'%</div></div>'
-      +'<div class="tele-kpi-box"><div class="tele-kpi-label">Calls</div><div class="tele-kpi-val">'+fmtN(teleSum.calls)+'</div></div>'
-      +'<div class="tele-kpi-box"><div class="tele-kpi-label">Visits</div><div class="tele-kpi-val">'+fmtN(teleSum.visits)+'</div></div>'
-      +'<div class="tele-kpi-box"><div class="tele-kpi-label">Active</div><div class="tele-kpi-val green">'+fmtN(teleSum.active)+'</div></div>'
-      +'<div class="tele-kpi-box"><div class="tele-kpi-label">Connected</div><div class="tele-kpi-val blue">'+fmtN(teleSum.connected)+'</div></div>'
-      +'</div></div>';
-  } else if(kpiEl){
-    kpiEl.innerHTML='<div class="alert alert-info">No Tele-RM data available.</div>';
-  }
-  renderOwnerCards('mTeleRMCards',d.teleRMPerf,'RM',true);
-  // State table
-  var tstates=d.teleStateSummaries||[];
-  var tel=$('mTeleStateTable'); if(tel){
-    var html='';
-    tstates.sort(function(a,b){return b.mtd-a.mtd;}).forEach(function(sm,i){
-      var mc=mtdClr(sm.mtd,sm.lmtd);
-      html+='<tr><td style="font-weight:700;color:var(--text-muted)">#'+(i+1)+'</td>';
-      html+='<td class="partner-name">'+safe(sm.state)+'</td>';
-      html+='<td>'+fmtN(sm.partners)+'</td>';
-      html+='<td>'+fmt(sm.maxPot,true)+'</td>';
-      html+='<td>'+fmt(sm.overallPot,true)+'</td>';
-      html+='<td class="'+mc+'" style="font-weight:700">'+fmt(sm.mtd,true)+'</td>';
-      html+='<td class="muted">'+fmt(sm.lmtd,true)+'</td>';
-      html+='<td class="'+clr(sm.momPct||0)+'">'+fmtPct(sm.momPct||0)+'</td>';
-      html+='<td>'+Math.round(sm.achPct||0)+'%</td>';
-      html+='<td class="green">'+fmtN(sm.active)+'</td>';
-      html+='<td class="blue">'+fmtN(sm.connected)+'</td>';
-      html+='<td>'+fmtN(sm.calls)+'</td>';
-      html+='<td>'+fmtN(sm.visits)+'</td></tr>';
+  var ts=(DATA.tele&&DATA.tele.summary)||{};
+  var team=(DATA.tele&&DATA.tele.team)||[];
+
+  $('m_teleMetrics').innerHTML=
+    '<div class="metric-card" style="border-left:3px solid var(--id-red);">'+
+      '<div class="mc-label">Tele-RM Partners</div>'+
+      '<div class="mc-value">'+fmtN(ts.total||0)+'</div>'+
+      '<div class="mc-sub">'+
+        '<span class="badge badge-green">Active: '+fmtN(ts.active||0)+'</span> '+
+        '<span class="badge badge-red">Inactive: '+fmtN(ts.inactive||0)+'</span>'+
+      '</div>'+
+    '</div>'+
+    '<div class="metric-card">'+
+      '<div class="mc-label">MTD Business</div>'+
+      '<div class="mc-value rupee">'+fmt(ts.mtd||0).replace('₹','')+'</div>'+
+    '</div>'+
+    '<div class="metric-card">'+
+      '<div class="mc-label">Calls / Visits</div>'+
+      '<div class="mc-value" style="color:var(--green)">'+fmtN(ts.calls||0)+' / '+fmtN(ts.visits||0)+'</div>'+
+    '</div>';
+
+  $('m_teleTeam').innerHTML=team.length===0
+    ?'<div class="empty-state"><div class="es-icon">📞</div><p>No Tele-RM team data.</p></div>'
+    :team.map(function(o){
+      var s=o.summary||{};
+      return'<div class="team-card">'+
+        '<div class="tc-header">'+
+          '<div>'+
+            '<div class="tc-name">'+safe(o.name)+'</div>'+
+            '<div style="font-size:11px;color:var(--text2);margin-top:3px;">Tele-RM · '+fmtN(o.count)+' partners</div>'+
+          '</div>'+
+          '<div class="tc-role" style="background:rgba(68,138,255,.15);color:var(--blue)">'+safe(o.role)+'</div>'+
+        '</div>'+
+        '<div class="tc-metrics">'+
+          '<div><div class="tc-m-label">MTD</div><div class="tc-m-value amber">'+fmt(s.mtd||0)+'</div></div>'+
+          '<div><div class="tc-m-label">Calls</div><div class="tc-m-value green">'+fmtN(s.calls||0)+'</div></div>'+
+          '<div><div class="tc-m-label">Partners</div><div class="tc-m-value dim">'+fmtN(o.count)+'</div></div>'+
+        '</div>'+
+      '</div>';
+    }).join('');
+
+  team.forEach(function(o,i){
+    $('m_teleTeam').querySelectorAll('.team-card')[i]&&
+    $('m_teleTeam').querySelectorAll('.team-card')[i].addEventListener('click',function(){
+      openTeamModal(team[i]);
     });
-    tel.querySelector('tbody').innerHTML=html||'<tr><td colspan="13" style="text-align:center;padding:20px;color:var(--text-muted)">No Tele-RM state data</td></tr>';
-  }
-  renderTelePartners();
+  });
+
+  // Tele-RM partner table (first 200)
+  var rows=TELE_PARTNERS.slice(0,200).map(function(p){
+    return'<tr>'+
+      '<td class="name-cell"><div class="p-name">'+safe(p.name)+'</div><div class="p-gid">'+safe(p.gid)+'</div></td>'+
+      '<td>'+safe(p.city)+'<br><span style="font-size:11px;color:var(--text3)">'+safe(p.state)+'</span></td>'+
+      '<td style="color:var(--text2)">'+safe(p.oName)+'<br><span style="font-size:11px;color:var(--text3)">'+safe(p.oRole)+'</span></td>'+
+      '<td class="val-amber">'+fmt(p.mtd)+'</td>'+
+      '<td>'+statusPill(p.active)+'</td>'+
+      '<td class="val-green">'+fmtN(p.calls)+'</td>'+
+      '<td class="val-dim">'+fmtN(p.visits)+'</td>'+
+      '<td><button class="btn-view" data-gid="'+safe(p.gid)+'" data-name="'+safe(p.name)+'">View</button></td>'+
+      '</tr>';
+  }).join('');
+
+  $('m_teleTableWrap').innerHTML=rows
+    ?'<div style="font-size:12px;font-weight:600;color:var(--text2);letter-spacing:.06em;text-transform:uppercase;margin:16px 0 8px;">Partner List</div>'+
+      '<div class="table-wrap"><table class="tbl"><thead><tr>'+
+      '<th>Partner</th><th>City/State</th><th>Owner</th><th>MTD</th><th>Status</th><th>Calls</th><th>Visits</th><th>Action</th>'+
+      '</tr></thead><tbody>'+rows+'</tbody></table></div>'
+    :'';
+  if($('m_teleTableWrap').innerHTML) attachViewButtons($('m_teleTableWrap'));
 }
 
-function renderTelePartners(){
-  var d=state.data; if(!d) return;
-  var partners=(d.partners||[]).filter(function(p){return p.isTele;});
-  var search=state.teleSearch.toLowerCase();
-  var sf=state.teleStatus;
-  var filtered=partners.filter(function(p){
-    if(search&&!(p.name||'').toLowerCase().includes(search)&&!(p.gid||'').toLowerCase().includes(search)) return false;
-    if(sf==='active'&&!p.active) return false;
-    if(sf==='inactive'&&p.active) return false;
-    if(sf==='connected'&&!p.connected) return false;
-    if(sf==='notconnected'&&p.connected) return false;
-    return true;
-  });
-  var cnt=$('mTeleCount'); if(cnt) cnt.textContent=filtered.length+' Tele-RM partners';
-  var el=$('mTelePartnerTable'); if(!el) return;
-  var html='';
-  filtered.slice(0,300).forEach(function(p){
-    var mc=mtdClr(p.mtd,p.lmtd);
-    html+='<tr>';
-    html+='<td><div class="partner-name">'+safe(p.name)+'</div><div class="partner-gid">'+safe(p.gid)+'</div></td>';
-    html+='<td class="muted">'+safe(p.city)+'</td>';
-    html+='<td class="muted">'+safe(p.state)+'</td>';
-    html+='<td class="muted">'+safe(p.ownerName)+'</td>';
-    html+='<td class="blue">'+fmt(p.ftd,true)+'</td>';
-    html+='<td class="'+mc+'" style="font-weight:700">'+fmt(p.mtd,true)+'</td>';
-    html+='<td class="muted">'+fmt(p.lmtd,true)+'</td>';
-    html+='<td>'+fmt(p.overallPot,true)+'</td>';
-    html+='<td>'+fmt(p.projection,true)+'</td>';
-    html+='<td>'+fmtN(p.calls)+'</td>';
-    html+='<td>'+fmtN(p.visits)+'</td>';
-    html+='<td>'+fmtN(p.monthsActive)+'</td>';
-    html+='<td><span class="card-badge '+(p.active?'badge-green':'badge-gray')+'">'+(p.active?'Active':'Inactive')+'</span></td>';
-    html+='<td><span class="card-badge '+(p.connected?'badge-blue':'badge-gray')+'">'+(p.connected?'Connected':'Not')+'</span></td>';
-    html+='<td><button class="btn btn-view" onclick="openMPartnerView(\''+safe(p.gid)+'\')">VIEW</button></td>';
-    html+='</tr>';
-  });
-  el.querySelector('tbody').innerHTML=html||'<tr><td colspan="15" style="text-align:center;padding:20px;color:var(--text-muted)">No Tele-RM partners found</td></tr>';
-}
+// ── Unconnected ───────────────────────────────────────────────
+function renderUnconnected(){
+  var unconn=ALL_PARTNERS
+    .filter(function(p){return p.calls===0&&p.visits===0;})
+    .sort(function(a,b){return(b.oPot||0)-(a.oPot||0);});
 
-// ── Cities ────────────────────────────────────────────────────
-function renderCities(){
-  var d=state.data; if(!d||!d.geoAnalytics) return;
-  renderMCityTable('mTopCitiesTable',d.geoAnalytics.top10||[],true);
-  renderMCityTable('mWorstCitiesTable',d.geoAnalytics.worst10||[],false);
-}
+  var totalPages=Math.max(1,Math.ceil(unconn.length/ITEMS));
+  if(M_UNCONN_PAGE>totalPages)M_UNCONN_PAGE=1;
+  var page=unconn.slice((M_UNCONN_PAGE-1)*ITEMS,M_UNCONN_PAGE*ITEMS);
 
-function renderMCityTable(tableId,cities,isTop){
-  var el=$(tableId); if(!el) return;
-  var html='';
-  cities.forEach(function(c,i){
-    var mc=mtdClr(c.mtd,c.lmtd);
-    var pct=c.potAchPct||0;
-    html+='<tr>';
-    html+='<td style="font-weight:700;color:'+(isTop?'var(--green)':'var(--red)')+'">'+( isTop?'▲ ':'▼ ')+'#'+(i+1)+'</td>';
-    html+='<td class="partner-name">'+safe(c.city)+'</td>';
-    html+='<td class="muted">'+safe(c.state)+'</td>';
-    html+='<td class="muted">'+safe(c.zone)+'</td>';
-    html+='<td>'+fmtN(c.partners)+'</td>';
-    html+='<td>'+fmt(c.overallPot,true)+'</td>';
-    html+='<td class="'+mc+'" style="font-weight:700">'+fmt(c.mtd,true)+'</td>';
-    html+='<td class="muted">'+fmt(c.lmtd,true)+'</td>';
-    html+='<td><div class="progress-wrap"><div class="progress-bar-bg"><div class="progress-bar-fill'+(pct<50?' red':'')+'" style="width:'+Math.min(pct/4,100)+'%"></div></div><b>'+pct.toFixed(0)+'%</b></div></td>';
-    html+='<td class="green">'+fmtN(c.active)+'</td>';
-    html+='<td>'+fmtN(c.calls)+'</td>';
-    html+='<td>'+fmtN(c.visits)+'</td>';
-    html+='<td><button class="btn btn-view" onclick="openMCityPartners(\''+safe(c.city)+'\',\''+safe(c.state)+'\')">Partners</button></td>';
-    html+='</tr>';
-  });
-  el.querySelector('tbody').innerHTML=html||'<tr><td colspan="13" style="text-align:center;padding:20px;color:var(--text-muted)">No data</td></tr>';
-}
+  $('m_unconnBody').innerHTML=page.map(function(p){
+    return'<tr>'+
+      '<td class="name-cell"><div class="p-name">'+safe(p.name)+'</div><div class="p-gid">'+safe(p.gid)+'</div></td>'+
+      '<td>'+safe(p.city)+'<br><span style="font-size:11px;color:var(--text3)">'+safe(p.state)+'</span></td>'+
+      '<td><span class="badge badge-grey">'+safe(p.zone)+'</span></td>'+
+      '<td style="color:var(--text2)">'+safe(p.oName)+'</td>'+
+      '<td class="val-amber">'+fmt(p.oPot)+'</td>'+
+      '<td class="val-dim">'+fmt(p.maxPot)+'</td>'+
+      '<td class="val-amber">'+fmt(p.mtd)+'</td>'+
+      '<td>'+statusPill(p.active)+'</td>'+
+      '</tr>';
+  }).join('');
 
-window.openMCityPartners=function(city,stateName){
-  var d=state.data; if(!d) return;
-  var plist=(d.partners||[]).filter(function(p){return p.city===city&&p.state===stateName;});
-  var el=$('mCityPartnerSection'); if(!el) return;
-  el.style.display='block';
-  var ttl=$('mCityPartnerTitle'); if(ttl) ttl.textContent='Partners in '+city+', '+stateName+' ('+plist.length+')';
-  var tbl=$('mCityPartnerTable'); if(!tbl) return;
-  var html='';
-  plist.forEach(function(p){
-    var mc=mtdClr(p.mtd,p.lmtd);
-    html+='<tr>';
-    html+='<td><div class="partner-name">'+safe(p.name)+'</div><div class="partner-gid">'+safe(p.gid)+'</div></td>';
-    html+='<td class="muted">'+safe(p.state)+'</td>';
-    html+='<td class="muted">'+safe(p.zone)+'</td>';
-    html+='<td class="muted">'+safe(p.ownerName)+'</td>';
-    html+='<td class="blue">'+fmt(p.ftd,true)+'</td>';
-    html+='<td class="'+mc+'" style="font-weight:700">'+fmt(p.mtd,true)+'</td>';
-    html+='<td class="muted">'+fmt(p.lmtd,true)+'</td>';
-    html+='<td>'+fmt(p.overallPot,true)+'</td>';
-    html+='<td>'+fmtN(p.calls)+'</td>';
-    html+='<td>'+fmtN(p.visits)+'</td>';
-    html+='<td><span class="card-badge '+(p.active?'badge-green':'badge-gray')+'">'+(p.active?'Active':'Inactive')+'</span></td>';
-    html+='<td><button class="btn btn-view" onclick="openMPartnerView(\''+safe(p.gid)+'\')">VIEW</button></td>';
-    html+='</tr>';
-  });
-  tbl.querySelector('tbody').innerHTML=html||'<tr><td colspan="12" style="text-align:center;padding:20px;color:var(--text-muted)">No partners</td></tr>';
-  el.scrollIntoView({behavior:'smooth',block:'start'});
-};
+  renderPagination('m_unconnPagination',M_UNCONN_PAGE,totalPages,
+    function(pg){M_UNCONN_PAGE=pg;renderUnconnected();});
+}
 
 // ── Login Activity ────────────────────────────────────────────
 function renderLoginActivity(){
-  apiFetch({action:'getLoginStats'},function(err,data){
-    if(err||!data||!data.success){ showError('Could not load login data'); return; }
-    window._mLoginLogs=data.logs||[];
-    window._mLoginByUser=data.byUser||[];
-    var lt=$('mLoginTotal'), lu=$('mLoginUnique');
-    if(lt) lt.textContent=data.totalLogins||0;
-    if(lu) lu.textContent=data.uniqueUsers||0;
-    renderMLoginByUser(data.byUser||[]);
-    renderMLoginLog(data.logs||[]);
-  });
-}
+  $('m_loginUsers').innerHTML ='<tr><td colspan="4" style="color:var(--text3);text-align:center;padding:20px;">Loading…</td></tr>';
+  $('m_loginRecent').innerHTML='<tr><td colspan="4" style="color:var(--text3);text-align:center;padding:20px;">Loading…</td></tr>';
 
-function applyLoginFilters(){
-  renderMLoginByUser(window._mLoginByUser||[]);
-  renderMLoginLog(window._mLoginLogs||[]);
-}
-
-function renderMLoginByUser(users){
-  var el=$('mLoginByUserTable'); if(!el) return;
-  var search=(($('mLoginSearch')||{}).value||'').toLowerCase();
-  var zf=($('mLoginZone')||{}).value||'';
-  var rf=($('mLoginRole')||{}).value||'';
-  var filtered=users.filter(function(u){
-    if(search&&!(u.name||'').toLowerCase().includes(search)&&!(u.uid||'').toLowerCase().includes(search)) return false;
-    if(zf&&u.zone!==zf) return false;
-    if(rf&&(u.role||'').toUpperCase()!==rf) return false;
-    return true;
-  });
-  var html='';
-  filtered.forEach(function(u){
-    var dt=u.lastLogin?new Date(u.lastLogin).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}):'—';
-    html+='<tr><td class="partner-name">'+safe(u.name||'—')+'</td><td class="muted">'+safe(u.uid)+'</td>';
-    html+='<td><span class="card-badge badge-blue">'+safe(u.role||'—')+'</span></td>';
-    html+='<td class="muted">'+safe(u.zone||'—')+'</td>';
-    html+='<td style="font-weight:700;color:var(--red)">'+fmtN(u.count)+'</td>';
-    html+='<td class="muted">'+dt+'</td></tr>';
-  });
-  el.querySelector('tbody').innerHTML=html||'<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-muted)">No login records yet</td></tr>';
-}
-
-function renderMLoginLog(logs){
-  var el=$('mLoginBody'); if(!el) return;
-  var search=(($('mLoginSearch')||{}).value||'').toLowerCase();
-  var zf=($('mLoginZone')||{}).value||'';
-  var rf=($('mLoginRole')||{}).value||'';
-  var df=($('mLoginDate')||{}).value||'';
-  var filtered=logs.filter(function(l){
-    if(search&&!(l.name||'').toLowerCase().includes(search)&&!(l.uid||'').toLowerCase().includes(search)) return false;
-    if(zf&&l.zone!==zf) return false;
-    if(rf&&(l.role||'').toUpperCase()!==rf) return false;
-    if(df&&!l.ts.startsWith(df)) return false;
-    return true;
-  });
-  var html='';
-  filtered.slice(0,200).forEach(function(l){
-    var dt=l.ts?new Date(l.ts).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}):'—';
-    html+='<tr><td class="partner-name">'+safe(l.name||'—')+'</td><td class="muted">'+safe(l.uid)+'</td>';
-    html+='<td><span class="card-badge badge-blue">'+safe(l.role||'—')+'</span></td>';
-    html+='<td class="muted">'+safe(l.zone||'—')+'</td><td class="muted">'+dt+'</td></tr>';
-  });
-  el.innerHTML=html||'<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted)">No login records</td></tr>';
-}
-
-// ── Partner VIEW modal ────────────────────────────────────────
-window.openMPartnerView=function(gid){
-  var d=state.data; if(!d) return;
-  var p=(d.partners||[]).find(function(x){return x.gid===gid;});
-  if(!p){ showError('Partner not found: '+gid); return; }
-  var el=$('mPartnerModal'); if(!el) return;
-  $('mPartnerModalTitle').textContent=safe(p.name)+' · '+safe(p.gid);
-  var mc=mtdClr(p.mtd,p.lmtd);
-  var html='<div class="modal-kpis">';
-  [{l:'FTD',v:fmt(p.ftd,true),c:'blue'},{l:'MTD',v:fmt(p.mtd,true),c:mc},
-   {l:'LMTD',v:fmt(p.lmtd,true),c:'muted'},{l:'Overall Pot.',v:fmt(p.overallPot,true),c:''},
-   {l:'Projection',v:fmt(p.projection,true),c:''},{l:'Max Pot.',v:fmt(p.bizPot,true),c:''},
-   {l:'Calls',v:fmtN(p.calls),c:'blue'},{l:'Visits',v:fmtN(p.visits),c:'blue'},
-   {l:'Months Active',v:fmtN(p.monthsActive),c:''},{l:'Avg Monthly',v:fmt(p.avgMonthly,true),c:''}
-  ].forEach(function(k){ html+='<div class="modal-kpi"><div class="modal-kpi-label">'+k.l+'</div><div class="modal-kpi-val '+k.c+'">'+k.v+'</div></div>'; });
-  html+='</div>';
-  html+='<div style="background:var(--bg);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:0.78rem;line-height:1.9">';
-  html+='<b>State:</b> '+safe(p.state)+' &nbsp;·&nbsp; <b>City:</b> '+safe(p.city)+' &nbsp;·&nbsp; <b>Zone:</b> '+safe(p.zone)+(p.isTele?' <span class="tele-badge">TELE</span>':'')+'<br>';
-  html+='<b>Owner:</b> '+safe(p.ownerName)+' ('+safe(p.ownerRole)+') &nbsp;·&nbsp; Emp: '+safe(p.ownerEmpId)+'<br>';
-  html+='<b>Status:</b> '+(p.active?'<span class="green">Active</span>':'<span class="red">Inactive</span>')+' &nbsp;·&nbsp; <b>Connected:</b> '+(p.connected?'<span class="blue">Yes</span>':'<span class="red">No — 0 Calls, 0 Visits</span>');
-  html+='</div>';
-  if(p.remark){ html+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 12px;font-size:0.75rem;margin-bottom:12px;color:#92400e">💬 '+safe(p.remark)+'</div>'; }
-  html+='<div class="chart-title">📈 14-Month Business Trend</div>';
-  html+='<canvas id="mPartnerTrendChart" height="160"></canvas>';
-  $('mPartnerModalBody').innerHTML=html;
-  el.classList.add('open');
-  setTimeout(function(){ renderMPartnerTrend(p); },60);
-};
-
-function renderMPartnerTrend(p){
-  var canvas=$('mPartnerTrendChart'); if(!canvas) return;
-  var months=p.months||[];
-  var labels=p.monthLabels||MONTH_LABELS;
-  if(window.mTrendInst) window.mTrendInst.destroy();
-  window.mTrendInst=new Chart(canvas,{
-    type:'bar',
-    data:{
-      labels:labels,
-      datasets:[{
-        label:'Business (₹)',
-        data:months,
-        backgroundColor:months.map(function(v,i){
-          return i===months.length-1?'rgba(216,31,42,0.8)':i===months.length-2?'rgba(37,99,235,0.7)':'rgba(37,99,235,0.4)';
-        }),
-        borderRadius:3, barPercentage:0.6
-      }]
-    },
-    options:{
-      responsive:true,
-      plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){return '₹'+ctx.parsed.y.toLocaleString('en-IN');}}}},
-      scales:{
-        y:{beginAtZero:true,ticks:{callback:function(v){return v>=100000?'₹'+(v/100000).toFixed(0)+'L':v>=1000?'₹'+(v/1000).toFixed(0)+'K':'₹'+v;}},grid:{color:'#f3f4f6'}},
-        x:{grid:{display:false}}
-      }
+  callApi('getLoginStats',{},function(err,res){
+    if(err||!res||!res.success){
+      $('m_loginUsers').innerHTML='<tr><td colspan="4" style="color:var(--text3);text-align:center;">No login data available.</td></tr>';
+      return;
     }
+    $('m_loginUsers').innerHTML=(res.users||[]).slice(0,30).map(function(u){
+      return'<tr>'+
+        '<td class="fw600">'+safe(u.name)+'</td>'+
+        '<td><span class="badge badge-grey">'+safe(u.role)+'</span></td>'+
+        '<td class="val-green fw600">'+fmtN(u.count)+'</td>'+
+        '<td class="text-dim">'+safe(u.last)+'</td>'+
+        '</tr>';
+    }).join('')||'<tr><td colspan="4" style="color:var(--text3);text-align:center;">No logins recorded yet.</td></tr>';
+
+    $('m_loginRecent').innerHTML=(res.logins||[]).slice(0,50).map(function(l){
+      return'<tr>'+
+        '<td class="text-dim fs12">'+safe(l.date)+'</td>'+
+        '<td class="fw600">'+safe(l.name)+'</td>'+
+        '<td class="mono" style="font-size:11px;color:var(--text3)">'+safe(l.gid)+'</td>'+
+        '<td><span class="badge badge-grey">'+safe(l.role)+'</span></td>'+
+        '</tr>';
+    }).join('')||'<tr><td colspan="4" style="color:var(--text3);text-align:center;">No recent activity.</td></tr>';
   });
 }
 
-// ── Charts ────────────────────────────────────────────────────
-function renderCharts(){
-  var d=state.data; if(!d) return;
-  var allOwners=[];
-  [d.zhPerf,d.shPerf,d.rhPerf,d.rmPerf,d.amPerf].forEach(function(arr){if(arr) allOwners=allOwners.concat(arr);});
-
-  // Chart 1: Calls & Visits
-  (function(){
-    var canvas=$('mCvChart'); if(!canvas) return;
-    var top10=allOwners.filter(function(o){return o.calls>0||o.visits>0;}).sort(function(a,b){return (b.calls+b.visits)-(a.calls+a.visits);}).slice(0,10);
-    if(!top10.length) top10=allOwners.slice(0,8);
-    if(window.mCvChartInst) window.mCvChartInst.destroy();
-    window.mCvChartInst=new Chart(canvas,{
-      type:'bar',
-      data:{
-        labels:top10.map(function(o){return o.name.split(' ')[0];}),
-        datasets:[
-          {label:'Calls',data:top10.map(function(o){return o.calls;}),backgroundColor:'rgba(37,99,235,0.75)',borderRadius:4,barPercentage:0.7},
-          {label:'Visits',data:top10.map(function(o){return o.visits;}),backgroundColor:'rgba(22,163,74,0.75)',borderRadius:4,barPercentage:0.7}
-        ]
-      },
-      options:{responsive:true,plugins:{legend:{position:'top'}},scales:{y:{beginAtZero:true,grid:{color:'#f3f4f6'}},x:{grid:{display:false}}}}
+// ── View Buttons ──────────────────────────────────────────────
+function attachViewButtons(container){
+  container.querySelectorAll('.btn-view').forEach(function(btn){
+    btn.addEventListener('click',function(e){
+      e.stopPropagation();
+      openPartnerModal(this.dataset.gid,this.dataset.name);
     });
-  })();
-
-  // Chart 2: Zone MTD vs LMTD
-  (function(){
-    var canvas=$('mZoneChart'); if(!canvas) return;
-    var zones=d.zoneSummaries||[];
-    if(window.mZoneChartInst) window.mZoneChartInst.destroy();
-    window.mZoneChartInst=new Chart(canvas,{
-      type:'bar',
-      data:{
-        labels:zones.map(function(z){return z.zone;}),
-        datasets:[
-          {label:'MTD',data:zones.map(function(z){return z.mtd;}),backgroundColor:'rgba(216,31,42,0.75)',borderRadius:4,barPercentage:0.6},
-          {label:'LMTD',data:zones.map(function(z){return z.lmtd;}),backgroundColor:'rgba(148,163,184,0.5)',borderRadius:4,barPercentage:0.6}
-        ]
-      },
-      options:{
-        responsive:true,
-        plugins:{legend:{position:'top'},tooltip:{callbacks:{label:function(ctx){return '₹'+(ctx.parsed.y/10000000).toFixed(2)+'Cr';}}}},
-        scales:{y:{beginAtZero:true,ticks:{callback:function(v){return '₹'+(v/10000000).toFixed(1)+'Cr';}},grid:{color:'#f3f4f6'}},x:{grid:{display:false}}}
-      }
-    });
-  })();
-
-  // Chart 3: Partner status donut
-  (function(){
-    var canvas=$('mDonutChart'); if(!canvas) return;
-    var op=d.overallProject||{};
-    if(window.mDonutInst) window.mDonutInst.destroy();
-    window.mDonutInst=new Chart(canvas,{
-      type:'doughnut',
-      data:{
-        labels:['Active','Inactive','Connected','Not Conn.'],
-        datasets:[{
-          data:[op.activePartners||0,op.inactivePartners||0,op.connectedPartners||0,(op.fieldPartners||0)-(op.connectedPartners||0)],
-          backgroundColor:['rgba(22,163,74,0.8)','rgba(216,31,42,0.7)','rgba(37,99,235,0.8)','rgba(148,163,184,0.5)'],
-          borderWidth:2,borderColor:'#fff'
-        }]
-      },
-      options:{responsive:true,plugins:{legend:{position:'bottom'},cutout:'60%'}}
-    });
-  })();
-
-  // Chart 4: Top 10 AMs by MTD
-  (function(){
-    var canvas=$('mAmChart'); if(!canvas) return;
-    var top10=(d.amPerf||[]).slice(0,10);
-    if(window.mAmChartInst) window.mAmChartInst.destroy();
-    window.mAmChartInst=new Chart(canvas,{
-      type:'bar',
-      data:{
-        labels:top10.map(function(o){return o.name.split(' ')[0];}),
-        datasets:[
-          {label:'MTD',data:top10.map(function(o){return o.mtd;}),backgroundColor:'rgba(216,31,42,0.75)',borderRadius:4,barPercentage:0.65},
-          {label:'LMTD',data:top10.map(function(o){return o.lmtd;}),backgroundColor:'rgba(148,163,184,0.5)',borderRadius:4,barPercentage:0.65}
-        ]
-      },
-      options:{
-        responsive:true,
-        plugins:{legend:{position:'top'},tooltip:{callbacks:{label:function(ctx){return '₹'+(ctx.parsed.y/100000).toFixed(1)+'L';}}}},
-        scales:{y:{beginAtZero:true,ticks:{callback:function(v){return '₹'+(v/100000).toFixed(0)+'L';}},grid:{color:'#f3f4f6'}},x:{grid:{display:false}}}
-      }
-    });
-  })();
+  });
 }
 
-// ── Modal closers ─────────────────────────────────────────────
-window.closeMOwnerModal  =function(){ var el=$('mOwnerModal');  if(el) el.classList.remove('open'); };
-window.closeMPartnerModal=function(){ var el=$('mPartnerModal'); if(el) el.classList.remove('open'); };
+function openPartnerModal(gid,name){
+  $('modalName').textContent=name||gid;
+  $('modalGID').textContent=gid;
+  $('modalBody').innerHTML='<div class="spinner" style="margin:40px auto;width:36px;height:36px;"></div>';
+  $('partnerModal').classList.add('open');
 
-// ── Event listeners ────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded',function(){
-  document.querySelectorAll('.nav-tab').forEach(function(tab){
-    tab.addEventListener('click',function(){ renderTab(tab.dataset.tab); });
+  var local=null;
+  ALL_PARTNERS.concat(TELE_PARTNERS).forEach(function(p){if(p.gid===gid)local=p;});
+
+  if(local){buildPartnerModal(local);}
+  else{
+    callApi('getPartner',{gid:gid},function(err,res){
+      if(err||!res||!res.success){
+        $('modalBody').innerHTML='<div class="empty-state"><p>Partner data not found.</p></div>';
+        return;
+      }
+      buildPartnerModal(res.partner);
+    });
+  }
+}
+
+function buildPartnerModal(p){
+  var mom=p.lmtd>0?Math.round((p.mtd-p.lmtd)*100/p.lmtd):(p.mtd>0?100:0);
+  var months=p.months||{};
+  var vals=MONTH_KEYS.map(function(k){return months[k]||0;});
+  var maxV=Math.max.apply(null,vals)||1;
+
+  // KPI Row
+  var kpis='<div class="modal-kpi-row">'+
+    '<div class="modal-kpi"><div class="mk-label">MTD (May\'26)</div><div class="mk-value '+(p.mtd>0?'green':'')+'">'+fmt(p.mtd)+'</div></div>'+
+    '<div class="modal-kpi"><div class="mk-label">LMTD (Apr\'26)</div><div class="mk-value">'+fmt(p.lmtd)+'</div></div>'+
+    '<div class="modal-kpi"><div class="mk-label">MoM</div><div class="mk-value '+(mom>=0?'green':'red')+'">'+(mom>=0?'+':'')+mom+'%</div></div>'+
+    '<div class="modal-kpi"><div class="mk-label">Target</div><div class="mk-value">'+fmt(p.target)+'</div></div>'+
+    '<div class="modal-kpi"><div class="mk-label">Max Potential</div><div class="mk-value amber">'+fmt(p.maxPot)+'</div></div>'+
+    '<div class="modal-kpi"><div class="mk-label">Overall Pot.</div><div class="mk-value amber">'+fmt(p.oPot)+'</div></div>'+
+    '<div class="modal-kpi"><div class="mk-label">Net Combined</div><div class="mk-value">'+fmt(p.net)+'</div></div>'+
+    '<div class="modal-kpi"><div class="mk-label">Avg Monthly</div><div class="mk-value">'+fmt(p.avg)+'</div></div>'+
+    '</div>';
+
+  // 14-month bar chart
+  var bars='<div class="modal-chart-wrap">'+
+    '<div class="modal-chart-title">14-Month Business Trend (Apr\'25 → Apr\'26)</div>'+
+    '<div class="bar-chart">';
+  vals.forEach(function(v,i){
+    var h=Math.max(2,Math.round((v/maxV)*110));
+    bars+='<div class="bar-col">'+
+      '<div class="b-val">'+fmtShort(v)+'</div>'+
+      '<div class="b-bar" style="height:'+h+'px"></div>'+
+      '<div class="b-label">'+MONTHS[i]+'</div>'+
+      '</div>';
   });
+  bars+='</div></div>';
 
-  // Partner filters
-  var ps=$('mPartnerSearch'), pz=$('mPartnerZone'), pst=$('mPartnerStatus'), po=$('mPartnerOwner');
-  if(ps) ps.addEventListener('input',debounce(function(){state.partnerSearch=ps.value;state.partnerPage=0;renderAllPartners();},300));
-  if(pz) pz.addEventListener('change',function(){state.partnerZone=pz.value;state.partnerPage=0;renderAllPartners();});
-  if(pst) pst.addEventListener('change',function(){state.partnerStatus=pst.value;state.partnerPage=0;renderAllPartners();});
-  if(po) po.addEventListener('input',debounce(function(){state.partnerOwner=po.value;state.partnerPage=0;renderAllPartners();},300));
+  // Info grid
+  var info='<div class="modal-info-grid">'+
+    '<div class="modal-info-item"><div class="mi-label">Owner</div><div class="mi-value">'+safe(p.oName)+' ('+safe(p.oRole)+')</div></div>'+
+    '<div class="modal-info-item"><div class="mi-label">Zone</div><div class="mi-value">'+safe(p.zone)+'</div></div>'+
+    '<div class="modal-info-item"><div class="mi-label">State / City</div><div class="mi-value">'+safe(p.state)+' · '+safe(p.city)+'</div></div>'+
+    '<div class="modal-info-item"><div class="mi-label">Months Active</div><div class="mi-value">'+fmtN(p.mAct)+' months</div></div>'+
+    '<div class="modal-info-item"><div class="mi-label">Calls / Visits</div><div class="mi-value">'+fmtN(p.calls)+' / '+fmtN(p.visits)+'</div></div>'+
+    '<div class="modal-info-item"><div class="mi-label">Status</div><div class="mi-value">'+statusPill(p.active)+'</div></div>'+
+    '<div class="modal-info-item"><div class="mi-label">Growth Trend</div><div class="mi-value">'+growthPill(p.growth)+'</div></div>'+
+    '<div class="modal-info-item"><div class="mi-label">FTD</div><div class="mi-value">'+fmt(p.ftd)+'</div></div>'+
+    '</div>';
 
-  // Unconnected filters
-  ['mUncZone','mUncRole'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('change',renderUnconnected); });
-  var us=$('mUncSearch'); if(us) us.addEventListener('input',debounce(renderUnconnected,300));
+  var rmk='';
+  if(p.rmkS||p.rmkP){
+    rmk='<div class="modal-remark">'+
+      '<div class="mr-title">📝 Remarks</div>'+
+      (p.rmkS?'<div class="mr-text"><strong>Sheet:</strong> '+safe(p.rmkS)+'</div>':'')+
+      (p.rmkP?'<div class="mr-text" style="margin-top:4px;"><strong>Partner:</strong> '+safe(p.rmkP)+'</div>':'')+
+      '</div>';
+  }
 
-  // Tele filters
-  var ts=$('mTeleSearch'), tst=$('mTeleStatus');
-  if(ts) ts.addEventListener('input',debounce(function(){state.teleSearch=ts.value;renderTelePartners();},300));
-  if(tst) tst.addEventListener('change',function(){state.teleStatus=tst.value;renderTelePartners();});
+  $('modalBody').innerHTML=kpis+bars+info+rmk;
+}
 
-  // Login filters
-  ['mLoginSearch','mLoginZone','mLoginRole','mLoginDate'].forEach(function(id){
-    var el=$(id); if(!el) return;
-    el.addEventListener('change',applyLoginFilters);
-    el.addEventListener('input',debounce(applyLoginFilters,300));
+// ── Team / Zone Drill Modal ───────────────────────────────────
+function openTeamModal(o){
+  $('tmModalName').textContent=o.name||'—';
+  $('tmModalSub').textContent=(o.role||'')+(o.count?' · '+fmtN(o.count)+' partners':'');
+
+  var s=o.summary||{};
+  var kpis='<div class="modal-kpi-row">'+
+    '<div class="modal-kpi"><div class="mk-label">MTD</div><div class="mk-value amber">'+fmt(s.mtd||0)+'</div></div>'+
+    '<div class="modal-kpi"><div class="mk-label">LMTD</div><div class="mk-value">'+fmt(s.lmtd||0)+'</div></div>'+
+    '<div class="modal-kpi"><div class="mk-label">Target</div><div class="mk-value">'+fmt(s.target||0)+'</div></div>'+
+    '<div class="modal-kpi"><div class="mk-label">Ach%</div><div class="mk-value '+(s.ach>=80?'green':s.ach>=50?'amber':'red')+'">'+fmtN(s.ach||0)+'%</div></div>'+
+    '<div class="modal-kpi"><div class="mk-label">Calls/Visits</div><div class="mk-value green">'+fmtN(s.calls||0)+'/'+fmtN(s.visits||0)+'</div></div>'+
+    '<div class="modal-kpi"><div class="mk-label">Connected</div><div class="mk-value">'+fmtN(s.connected||0)+'/'+fmtN(o.count||0)+'</div></div>'+
+    '</div>';
+
+  var rows=(o.partners||[]).slice(0,300).map(function(p){
+    return'<tr>'+
+      '<td class="name-cell"><div class="p-name">'+safe(p.name)+'</div><div class="p-gid">'+safe(p.gid)+'</div></td>'+
+      '<td>'+safe(p.city)+'<br><span style="font-size:11px;color:var(--text3)">'+safe(p.state)+'</span></td>'+
+      '<td class="val-amber">'+fmt(p.mtd)+'</td>'+
+      '<td class="val-dim">'+fmt(p.lmtd)+'</td>'+
+      '<td class="val-dim">'+fmt(p.target)+'</td>'+
+      '<td>'+growthPill(p.growth)+'</td>'+
+      '<td>'+statusPill(p.active)+'</td>'+
+      '<td class="val-green">'+fmtN(p.calls)+'</td>'+
+      '<td class="val-dim">'+fmtN(p.visits)+'</td>'+
+      '<td><button class="btn-view" data-gid="'+safe(p.gid)+'" data-name="'+safe(p.name)+'">View</button></td>'+
+      '</tr>';
+  }).join('');
+
+  $('tmModalBody').innerHTML=kpis+
+    '<div class="table-wrap" style="max-height:420px;overflow-y:auto;">'+
+    '<table class="tbl"><thead><tr>'+
+    '<th>Partner</th><th>City/State</th><th>MTD</th><th>LMTD</th><th>Target</th>'+
+    '<th>Growth</th><th>Status</th><th>Calls</th><th>Visits</th><th>Action</th>'+
+    '</tr></thead><tbody>'+rows+'</tbody></table></div>';
+
+  attachViewButtons($('tmModalBody'));
+  $('teamModal').classList.add('open');
+}
+
+// ── Pagination ────────────────────────────────────────────────
+function renderPagination(containerId,current,total,onPage){
+  var el=$(containerId);
+  if(!el||total<=1){if(el)el.innerHTML='';return;}
+  var html='<div style="color:var(--text2)">Page '+current+' of '+total+'</div><div class="pg-btns">';
+  html+='<button class="pg-btn" '+(current===1?'disabled':'')+' data-pg="'+(current-1)+'">‹ Prev</button>';
+  var start=Math.max(1,current-2),end=Math.min(total,current+2);
+  for(var i=start;i<=end;i++){
+    html+='<button class="pg-btn'+(i===current?' active':'')+'" data-pg="'+i+'">'+i+'</button>';
+  }
+  html+='<button class="pg-btn" '+(current===total?'disabled':'')+' data-pg="'+(current+1)+'">Next ›</button>';
+  html+='</div>';
+  el.innerHTML=html;
+  el.querySelectorAll('.pg-btn:not([disabled])').forEach(function(btn){
+    btn.addEventListener('click',function(){onPage(parseInt(this.dataset.pg));});
   });
-  var mlr=$('mLoginRefresh'); if(mlr) mlr.addEventListener('click',renderLoginActivity);
+}
 
-  // Modal backdrop
-  ['mOwnerModal','mPartnerModal'].forEach(function(id){
-    var el=$(id); if(!el) return;
-    el.addEventListener('click',function(e){ if(e.target===el) el.classList.remove('open'); });
+// ── CSV Export ────────────────────────────────────────────────
+function exportCSV(){
+  var filtered=applyAPFilters(ALL_PARTNERS);
+  var headers=['GID','Name','City','State','Zone','Owner','Role',
+               'Max Pot','Overall Pot','Target','MTD','LMTD','MoM%',
+               'Growth','Status','Calls','Visits'];
+  var rows=[headers.join(',')];
+  filtered.forEach(function(p){
+    var mom=p.lmtd>0?Math.round((p.mtd-p.lmtd)*100/p.lmtd):(p.mtd>0?100:0);
+    rows.push([p.gid,p.name,p.city,p.state,p.zone,p.oName,p.oRole,
+               p.maxPot,p.oPot,p.target,p.mtd,p.lmtd,mom+'%',
+               p.growth,p.active,p.calls,p.visits]
+      .map(function(v){return'"'+String(v||'').replace(/"/g,'""')+'"';}).join(','));
   });
+  var blob=new Blob([rows.join('\n')],{type:'text/csv'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');
+  a.href=url;a.download='master_export.csv';a.click();
+  URL.revokeObjectURL(url);
+}
 
-  var logoutBtn=$('logoutBtn'); if(logoutBtn) logoutBtn.addEventListener('click',function(){sessionStorage.clear();window.location.href='index.html';});
-  var refreshBtn=$('refreshBtn'); if(refreshBtn) refreshBtn.addEventListener('click',loadData);
-  loadData();
-});
 })();
