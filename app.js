@@ -51,8 +51,8 @@ function pctClass(v){
 }
 
 function statusPill(active){
-  var a=String(active||'').toLowerCase();
-  var isActive=(a==='active'||a==='1'||a==='yes'||Number(active)>0);
+  var a=String(active||'').toLowerCase().trim();
+  var isActive=(a==='active'||a==='1'||a==='yes');
   return isActive
     ? '<span class="pill pill-active">● Active</span>'
     : '<span class="pill pill-inactive">○ Inactive</span>';
@@ -60,11 +60,10 @@ function statusPill(active){
 
 function growthPill(growth){
   var g=String(growth||'').toLowerCase();
-  if(g.indexOf('degrowth')>=0) return '<span class="pill pill-degrowth">▼ Degrowth</span>';
-  if(g.indexOf('growth')>=0)   return '<span class="pill pill-growth">▲ Growth</span>';
-  var pv=parseFloat(String(growth).replace('%',''))||0;
-  if(pv>0) return '<span class="pill pill-growth">▲ Growth</span>';
-  if(pv<0) return '<span class="pill pill-degrowth">▼ Degrowth</span>';
+  var gn=parseFloat(String(growth||'').replace(/%/g,'').trim())||0;
+  if(gn>0) return '<span class="pill pill-growth">▲ '+String(growth)+'</span>';
+  if(gn<0) return '<span class="pill pill-degrowth">▼ '+String(growth)+'</span>';
+  return '<span class="pill pill-inactive">— Flat</span>';
   return '<span class="pill pill-inactive">— Flat</span>';
 }
 
@@ -441,14 +440,15 @@ function applyFilters(partners){
     if(role  && p.oRole!==role)  return false;
     if(status){
       var a=String(p.active||'').toLowerCase();
-      var isAct=(a==='active'||a==='1'||a==='yes'||Number(p.active)>0);
+      var isAct=(a==='active');
       if(status==='active'&&!isAct) return false;
       if(status==='inactive'&&isAct) return false;
     }
     if(trend){
       var g=String(p.growth||'').toLowerCase();
-      if(trend==='growth'&&g.indexOf('degrowth')>=0) return false;
-      if(trend==='degrowth'&&g.indexOf('degrowth')<0) return false;
+      var gn2=parseFloat(String(p.growth||'').replace(/%/g,'').trim())||0;
+      if(trend==='growth'&&gn2<=0) return false;
+      if(trend==='degrowth'&&gn2>=0) return false;
     }
     if(conn){
       var isConn=(p.calls>0||p.visits>0);
@@ -542,14 +542,15 @@ function renderMyPartners(){
     if(search&&!(p.name||'').toLowerCase().includes(search)&&!(p.gid||'').toLowerCase().includes(search)) return false;
     if(status){
       var a=String(p.active||'').toLowerCase();
-      var isAct=(a==='active'||a==='1'||a==='yes'||Number(p.active)>0);
+      var isAct=(a==='active');
       if(status==='active'&&!isAct) return false;
       if(status==='inactive'&&isAct) return false;
     }
     if(trend){
       var g=String(p.growth||'').toLowerCase();
-      if(trend==='growth'&&g.indexOf('degrowth')>=0) return false;
-      if(trend==='degrowth'&&g.indexOf('degrowth')<0) return false;
+      var gn2=parseFloat(String(p.growth||'').replace(/%/g,'').trim())||0;
+      if(trend==='growth'&&gn2<=0) return false;
+      if(trend==='degrowth'&&gn2>=0) return false;
     }
     return true;
   });
@@ -958,11 +959,11 @@ function summarizeList(partners){
     s.calls+=p.calls||0; s.visits+=p.visits||0;
     s.maxPot+=p.maxPot||0; s.oPot+=p.oPot||0; s.target+=p.target||0;
     var a=String(p.active||'').toLowerCase();
-    if(a==='active'||a==='1'||a==='yes'||Number(p.active)>0) s.active++; else s.inactive++;
+    if(String(p.active||'').toLowerCase()==='active') s.active++; else s.inactive++;
     if(p.calls>0||p.visits>0) s.connected++; else s.notConn++;
     var g=String(p.growth||'').toLowerCase();
-    if(g.indexOf('degrowth')>=0) s.degrowth++;
-    else if(g.indexOf('growth')>=0||parseFloat(String(p.growth||''))>0) s.growth++;
+    var gnv=parseFloat(String(p.growth||'').replace(/%/g,'').trim())||0;
+    if(gnv>0) s.growth++; else if(gnv<0) s.degrowth++;
   });
   s.mom=s.lmtd>0?Math.round((s.mtd-s.lmtd)*100/s.lmtd):0;
   return s;
